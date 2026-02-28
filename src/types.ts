@@ -2,12 +2,24 @@ export type Role = 'instructor' | 'dispatcher' | 'rtp' | 'squad' | 'chief';
 
 export type Point = { x: number; y: number };
 
-export type ZoneType = 'fire_origin' | 'fire_zone' | 'temp_zone' | 'smoke_zone' | 'building' | 'fence' | 'terrain';
+export type ZoneType = 
+  | 'fire_origin' 
+  | 'fire_zone' 
+  | 'temp_zone' 
+  | 'smoke_zone' 
+  | 'building' 
+  | 'fence' 
+  | 'terrain'
+  | 'wall' 
+  | 'door' 
+  | 'window' 
+  | 'water_source';
 
 export type Zone = {
   id: string;
   type: ZoneType;
   points: Point[];
+  floor: number; // Новое поле: номер этажа
 };
 
 export type ScenarioState = {
