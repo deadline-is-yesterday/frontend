@@ -4,7 +4,6 @@ import { Mic, MicOff, Radio } from 'lucide-react';
 import { Role } from '../types';
 
 const BACKEND_URL = import.meta.env.VITE_API_URL;
-console.log("URL БЭКЕНДА ИЗ ENV:", BACKEND_URL);
 const BUFFER_SIZE = 4096;
 
 interface Props {
@@ -31,18 +30,25 @@ export default function CommunicationPanel({ role: _role }: Props) {
     return rxCtxRef.current;
   }
 
-  function playPcm(data: ArrayBuffer) {
+function playPcm(data: ArrayBuffer) {
     if (isTransmittingRef.current) return;
     const pcm = new Float32Array(data);
     const ctx = getRxCtx();
     if (ctx.state === 'suspended') ctx.resume();
+    
     const buffer = ctx.createBuffer(1, pcm.length, ctx.sampleRate);
     buffer.copyToChannel(pcm, 0);
+    
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
+    
     const now = ctx.currentTime;
-    const startAt = Math.max(nextPlayTimeRef.current, now);
+    let startAt = Math.max(nextPlayTimeRef.current, now);
+    if (startAt > now + 0.3) {
+      startAt = now;
+    }
+
     source.start(startAt);
     nextPlayTimeRef.current = startAt + buffer.duration;
   }
