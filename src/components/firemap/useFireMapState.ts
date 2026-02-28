@@ -8,10 +8,10 @@ const EMPTY_LAYOUT: MapLayout = {
 };
 
 /** Путь API для синхронизации конца рукава (задать позже). */
-export const HOSE_ENDPOINT_API = '/firesim/hose';
+export const HOSE_ENDPOINT_API = '/game_logic/hose';
 
 /** Путь API для синхронизации техники (задать позже). */
-export const EQUIPMENT_ENDPOINT_API = '/firesim/car';
+export const EQUIPMENT_ENDPOINT_API = '/game_logic/car';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 
