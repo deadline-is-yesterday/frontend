@@ -48,7 +48,9 @@ export default function CommunicationPanel({ role: _role }: Props) {
   }
 
   useEffect(() => {
-    const socket = io(BACKEND_URL);
+    const socket = io(BACKEND_URL, {
+      transports: ['websocket']
+    });
     socketRef.current = socket;
 
     socket.on('stack_update', ({ active }: { active: boolean }) => {
