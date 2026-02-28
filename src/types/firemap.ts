@@ -17,6 +17,10 @@ export type EquipmentSpec = {
   icon_path: string; // relative path → /ICONS/<icon_path>
   hoses: HoseSpec[];
   branchings: BranchingSpec[];
+  /** Если != null — машина уже размещена на карте. */
+  placement_id: string | null;
+  x: number | null;
+  y: number | null;
 };
 
 export type Hydrant = {
@@ -36,8 +40,7 @@ export type FireMap = {
 
 // Состояние расстановки
 export type PlacedEquipment = {
-  instance_id: string;
-  equipment_id: string;
+  instance_id: string; // = id конкретной машины из бэка
   x: number;
   y: number;
 };

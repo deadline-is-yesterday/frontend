@@ -39,10 +39,16 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
     finishHose,
     cancelHose,
     deleteHose,
+    moveWaypoint,
+    revertHoseIfOverLimit,
+    insertWaypoint,
+    removeWaypoint,
     loadLayout,
     placeBranching,
     moveBranching,
     deleteBranching,
+    syncHose,
+    syncEquipment,
   } = useFireMapState();
 
   // Zoom & pan
@@ -56,10 +62,22 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
   // Позиция курсора в координатах плана (для ghost-иконки)
   const [cursorPlan, setCursorPlan] = useState({ x: 0, y: 0 });
 
-  // Загрузить сохранённую расстановку при получении
+  // Загрузить сохранённую расстановку + авто-размещение техники из бэка
   useEffect(() => {
     if (savedLayout) loadLayout(savedLayout);
-  }, [savedLayout, loadLayout]);
+
+    // Машины, у которых есть placed_id, x, y — авто-размещаем
+    const prePlaced = equipment
+      .filter(eq => eq.placed_id != null && eq.x != null && eq.y != null)
+      .map(eq => ({ instance_id: eq.id, x: eq.x!, y: eq.y! }));
+    if (prePlaced.length > 0) {
+      loadLayout({
+        placed_equipment: prePlaced,
+        placed_branchings: savedLayout?.placed_branchings ?? [],
+        hoses: savedLayout?.hoses ?? [],
+      });
+    }
+  }, [savedLayout, equipment, loadLayout]);
 
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const isSpaceRef = useRef(false);
@@ -188,8 +206,6 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
   const handleSvgClick = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
       if (isPanningRef.current) return;
-      // Игнорируем второй клик даблклика (detail >= 2)
-      if (e.detail >= 2) return;
 
       const planPos = toPlanCoords(e.clientX, e.clientY);
 
@@ -233,16 +249,26 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
       }
 
       // Клик на пустое место — снять выделение
+      // Если был выделен рукав, проверить лимит длины
+      if (selectedId && map) {
+        const hose = layout.hoses.find(h => h.id === selectedId);
+        if (hose) {
+          const eq = layout.placed_equipment.find(e => e.instance_id === hose.equipment_instance_id);
+          const spec = eq ? equipment.find(s => s.id === eq.instance_id) : null;
+          const maxLen = spec?.hoses.find(h => h.id === hose.hose_id)?.max_length_m;
+          if (maxLen) revertHoseIfOverLimit(maxLen, map.scale_m_per_px);
+        }
+      }
       setSelectedId(null);
     },
-    [mode, pendingEquipmentId, pendingBranchingEqId, toPlanCoords, placeEquipment, placeBranching, setSelectedId, addWaypoint, finishHose, findNearbyHydrant, findNearbyBranchingInput, map],
+    [mode, pendingEquipmentId, pendingBranchingEqId, toPlanCoords, placeEquipment, placeBranching, setSelectedId, addWaypoint, finishHose, findNearbyHydrant, findNearbyBranchingInput, map, selectedId, layout, equipment, revertHoseIfOverLimit],
   );
 
-  // Двойной клик — завершить рукав в свободной точке
-  const handleSvgDoubleClick = useCallback(
+  // ПКМ — завершить рукав в свободной точке
+  const handleSvgContextMenu = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
-      if (mode !== 'draw_hose' || !drawingHose) return;
       e.preventDefault();
+      if (mode !== 'draw_hose' || !drawingHose) return;
       const planPos = toPlanCoords(e.clientX, e.clientY);
       addWaypoint(planPos, map?.scale_m_per_px ?? 0.05);
       finishHose({ type: 'free', x: planPos.x, y: planPos.y, hydrant_id: null, branching_instance_id: null });
@@ -310,7 +336,7 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
     if (!map) return;
     setIsSaving(true);
     try {
-      await fetch(`http://localhost:5000/firemap/maps/${map.id}/layout`, {
+      await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:5000'}/firemap/maps/${map.id}/layout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(layout),
@@ -326,7 +352,7 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
     ? equipment.find(
         s =>
           s.id ===
-          layout.placed_equipment.find(e => e.instance_id === selectedId)?.equipment_id,
+          layout.placed_equipment.find(e => e.instance_id === selectedId)?.instance_id,
       )
     : null;
 
@@ -370,6 +396,7 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
         {/* Левая панель — список техники */}
         <EquipmentPanel
           equipment={equipment}
+          placedIds={layout.placed_equipment.map(e => e.instance_id)}
           pendingEquipmentId={pendingEquipmentId}
           onSelect={handleEquipmentPanelSelect}
         />
@@ -387,7 +414,7 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
           <svg
             className="w-full h-full"
             onClick={handleSvgClick}
-            onDoubleClick={handleSvgDoubleClick}
+            onContextMenu={handleSvgContextMenu}
             style={{ display: 'block' }}
           >
             <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
@@ -406,6 +433,19 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
                   setSelectedId(id);
                   setMode('select');
                 }}
+                onMoveWaypoint={moveWaypoint}
+                onMoveWaypointEnd={syncHose}
+                selectedHoseMaxLength={(() => {
+                  if (!selectedId) return undefined;
+                  const hose = layout.hoses.find(h => h.id === selectedId);
+                  if (!hose) return undefined;
+                  const eq = layout.placed_equipment.find(e => e.instance_id === hose.equipment_instance_id);
+                  if (!eq) return undefined;
+                  const spec = equipment.find(s => s.id === eq.instance_id);
+                  return spec?.hoses.find(h => h.id === hose.hose_id)?.max_length_m;
+                })()}
+                onInsertWaypoint={insertWaypoint}
+                onRemoveWaypoint={removeWaypoint}
               />
               {map && <HydrantLayer hydrants={map.hydrants} zoom={zoom} />}
               <EquipmentLayer
@@ -424,6 +464,7 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
                   }
                 }}
                 onMove={moveEquipment}
+                onMoveEnd={syncEquipment}
                 onConnectorClick={handleConnectorClick}
               />
 

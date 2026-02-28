@@ -23,6 +23,7 @@ const MOCK_EQUIPMENT: EquipmentSpec[] = [
       { id: 'h2', max_length_m: 100 },
     ],
     branchings: [{ id: 'b1', type: 'three_way' }],
+    placement_id: null, x: null, y: null,
   },
   {
     id: 'al30',
@@ -30,6 +31,7 @@ const MOCK_EQUIPMENT: EquipmentSpec[] = [
     icon_path: 'Лист 02/04.Пожарная автолестница.png',
     hoses: [{ id: 'h1', max_length_m: 60 }],
     branchings: [],
+    placement_id: null, x: null, y: null,
   },
   {
     id: 'asa',
@@ -37,6 +39,7 @@ const MOCK_EQUIPMENT: EquipmentSpec[] = [
     icon_path: 'Лист 01/02.Пожарный аварийно–спасательный автомобиль.png',
     hoses: [],
     branchings: [],
+    placement_id: null, x: null, y: null,
   },
   {
     id: 'apm',
@@ -44,10 +47,11 @@ const MOCK_EQUIPMENT: EquipmentSpec[] = [
     icon_path: 'Лист 03/01.Мотопомпа пожарная: переносная.png',
     hoses: [{ id: 'h1', max_length_m: 40 }],
     branchings: [{ id: 'b1', type: 'two_way' }],
+    placement_id: null, x: null, y: null,
   },
 ];
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 
 export function useFireMapData(mapId: string): {
   map: FireMap | null;

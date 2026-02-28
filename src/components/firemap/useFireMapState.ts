@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { MapLayout, EditorMode, Point, DrawingHose, HoseEndpoint } from '../../types/firemap';
 
 const EMPTY_LAYOUT: MapLayout = {
@@ -6,6 +6,50 @@ const EMPTY_LAYOUT: MapLayout = {
   placed_branchings: [],
   hoses: [],
 };
+
+/** Путь API для синхронизации конца рукава (задать позже). */
+export const HOSE_ENDPOINT_API = '/firesim/hose';
+
+/** Путь API для синхронизации техники (задать позже). */
+export const EQUIPMENT_ENDPOINT_API = '/firesim/car';
+
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
+
+/** Fire-and-forget запрос к бэку для конца рукава. */
+function syncHoseEndpoint(
+  method: 'POST' | 'PUT' | 'DELETE',
+  id: string,
+  endpoint?: { x: number; y: number },
+) {
+  if (!HOSE_ENDPOINT_API) return;
+  const url = `${API_BASE}${HOSE_ENDPOINT_API}`;
+  fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id,
+      x: endpoint?.x ?? 0,
+      y: endpoint?.y ?? 0,
+      angle: 0,
+      enabled: true,
+    }),
+  }).catch(() => {});
+}
+
+/** Fire-and-forget запрос к бэку для техники. */
+function syncEquipmentEndpoint(
+  method: 'POST' | 'PUT' | 'DELETE',
+  id: string,
+  pos?: { x: number; y: number },
+) {
+  if (!EQUIPMENT_ENDPOINT_API) return;
+  const url = `${API_BASE}${EQUIPMENT_ENDPOINT_API}`;
+  fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, x: pos?.x ?? 0, y: pos?.y ?? 0 }),
+  }).catch(() => {});
+}
 
 /** Евклидово расстояние между двумя точками. */
 function dist(a: Point, b: Point): number {
@@ -19,6 +63,17 @@ export function polylineLength(pts: Point[]): number {
   return len;
 }
 
+/** Расстояние от точки до отрезка AB. */
+function distToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return dist(p, a);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return dist(p, { x: a.x + t * dx, y: a.y + t * dy });
+}
+
 export function useFireMapState() {
   const [layout, setLayout] = useState<MapLayout>(EMPTY_LAYOUT);
   const [mode, setMode] = useState<EditorMode>('select');
@@ -27,6 +82,9 @@ export function useFireMapState() {
   /** Рукав в процессе рисования. */
   const [drawingHose, setDrawingHose] = useState<DrawingHose | null>(null);
 
+  /** Снэпшот waypoints рукава до начала редактирования. */
+  const hoseSnapshotRef = useRef<{ hoseId: string; waypoints: Point[] } | null>(null);
+
   /** Загрузить сохранённую расстановку. */
   const loadLayout = useCallback((saved: MapLayout) => {
     setLayout(saved);
@@ -34,13 +92,13 @@ export function useFireMapState() {
     setMode('select');
   }, []);
 
-  const placeEquipment = useCallback((equipment_id: string, x: number, y: number) => {
-    const instance_id = crypto.randomUUID();
+  const placeEquipment = useCallback((id: string, x: number, y: number) => {
     setLayout(prev => ({
       ...prev,
-      placed_equipment: [...prev.placed_equipment, { instance_id, equipment_id, x, y }],
+      placed_equipment: [...prev.placed_equipment, { instance_id: id, x, y }],
     }));
-    return instance_id;
+    syncEquipmentEndpoint('POST', id, { x, y });
+    return id;
   }, []);
 
   const moveEquipment = useCallback((instance_id: string, x: number, y: number) => {
@@ -53,14 +111,29 @@ export function useFireMapState() {
   }, []);
 
   const deleteObject = useCallback((instance_id: string) => {
-    setLayout(prev => ({
-      ...prev,
-      placed_equipment: prev.placed_equipment.filter(e => e.instance_id !== instance_id),
-      placed_branchings: prev.placed_branchings.filter(
-        b => b.equipment_instance_id !== instance_id,
-      ),
-      hoses: prev.hoses.filter(h => h.equipment_instance_id !== instance_id),
-    }));
+    setLayout(prev => {
+      // Определяем, что удаляем: технику или рукав
+      const isEquipment = prev.placed_equipment.some(e => e.instance_id === instance_id);
+      const isHose = prev.hoses.some(h => h.id === instance_id);
+
+      if (isEquipment) {
+        syncEquipmentEndpoint('DELETE', instance_id);
+        // Удаляем рукава, привязанные к этой технике
+        prev.hoses
+          .filter(h => h.equipment_instance_id === instance_id)
+          .forEach(h => syncHoseEndpoint('DELETE', h.id));
+      }
+      if (isHose) syncHoseEndpoint('DELETE', instance_id);
+
+      return {
+        ...prev,
+        placed_equipment: prev.placed_equipment.filter(e => e.instance_id !== instance_id),
+        placed_branchings: prev.placed_branchings.filter(
+          b => b.instance_id !== instance_id && b.equipment_instance_id !== instance_id,
+        ),
+        hoses: prev.hoses.filter(h => h.id !== instance_id && h.equipment_instance_id !== instance_id),
+      };
+    });
     setSelectedId(id => (id === instance_id ? null : id));
   }, []);
 
@@ -105,12 +178,13 @@ export function useFireMapState() {
   const finishHose = useCallback(
     (endpoint: HoseEndpoint) => {
       if (!drawingHose) return;
+      const id = crypto.randomUUID();
       setLayout(prev => ({
         ...prev,
         hoses: [
           ...prev.hoses,
           {
-            id: crypto.randomUUID(),
+            id,
             equipment_instance_id: drawingHose.equipment_instance_id,
             hose_id: drawingHose.hose_id,
             waypoints: drawingHose.waypoints,
@@ -118,6 +192,7 @@ export function useFireMapState() {
           },
         ],
       }));
+      syncHoseEndpoint('POST', id, { x: endpoint.x, y: endpoint.y });
       setDrawingHose(null);
       setMode('select');
     },
@@ -166,26 +241,134 @@ export function useFireMapState() {
   /** Сдвинуть waypoint существующего рукава. */
   const moveWaypoint = useCallback(
     (hose_id: string, waypointIndex: number, point: Point) => {
-      setLayout(prev => ({
-        ...prev,
-        hoses: prev.hoses.map(h => {
-          if (h.id !== hose_id) return h;
-          const wp = [...h.waypoints];
-          wp[waypointIndex] = point;
-          return { ...h, waypoints: wp };
-        }),
-      }));
+      setLayout(prev => {
+        // Сохраняем снэпшот при первом перемещении
+        if (!hoseSnapshotRef.current || hoseSnapshotRef.current.hoseId !== hose_id) {
+          const hose = prev.hoses.find(h => h.id === hose_id);
+          if (hose) {
+            hoseSnapshotRef.current = { hoseId: hose_id, waypoints: [...hose.waypoints] };
+          }
+        }
+        return {
+          ...prev,
+          hoses: prev.hoses.map(h => {
+            if (h.id !== hose_id) return h;
+            const wp = [...h.waypoints];
+            wp[waypointIndex] = point;
+            return { ...h, waypoints: wp };
+          }),
+        };
+      });
+    },
+    [],
+  );
+
+  /**
+   * Откатить рукав к снэпшоту, если его длина превышает лимит.
+   * Вызывается при снятии выделения.
+   */
+  const revertHoseIfOverLimit = useCallback(
+    (maxLengthM: number, scale_m_per_px: number) => {
+      const snap = hoseSnapshotRef.current;
+      if (!snap) return;
+      setLayout(prev => {
+        const hose = prev.hoses.find(h => h.id === snap.hoseId);
+        if (!hose) return prev;
+        const lenM = polylineLength(hose.waypoints) * scale_m_per_px;
+        if (lenM > maxLengthM) {
+          // Откатываем
+          return {
+            ...prev,
+            hoses: prev.hoses.map(h =>
+              h.id === snap.hoseId ? { ...h, waypoints: snap.waypoints } : h,
+            ),
+          };
+        }
+        return prev;
+      });
+      hoseSnapshotRef.current = null;
     },
     [],
   );
 
   /** Удалить конкретный рукав по id. */
   const deleteHose = useCallback((hose_id: string) => {
+    syncHoseEndpoint('DELETE', hose_id);
     setLayout(prev => ({
       ...prev,
       hoses: prev.hoses.filter(h => h.id !== hose_id),
     }));
     setSelectedId(id => (id === hose_id ? null : id));
+  }, []);
+
+  /** Добавить waypoint к существующему рукаву (вставить между ближайшими). */
+  const insertWaypoint = useCallback(
+    (hose_id: string, point: Point) => {
+      setLayout(prev => {
+        const updated = {
+          ...prev,
+          hoses: prev.hoses.map(h => {
+            if (h.id !== hose_id) return h;
+            const wp = h.waypoints;
+            let bestIdx = wp.length - 1;
+            let bestDist = Infinity;
+            for (let i = 0; i < wp.length - 1; i++) {
+              const d = distToSegment(point, wp[i], wp[i + 1]);
+              if (d < bestDist) {
+                bestDist = d;
+                bestIdx = i + 1;
+              }
+            }
+            const newWp = [...wp];
+            newWp.splice(bestIdx, 0, point);
+            return { ...h, waypoints: newWp };
+          }),
+        };
+        // Синхронизируем с бэком
+        const hose = updated.hoses.find(h => h.id === hose_id);
+        if (hose) syncHoseEndpoint('PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+        return updated;
+      });
+    },
+    [],
+  );
+
+  /** Удалить waypoint из рукава по индексу (если останется >= 2 точки). */
+  const removeWaypoint = useCallback(
+    (hose_id: string, waypointIndex: number) => {
+      setLayout(prev => {
+        const updated = {
+          ...prev,
+          hoses: prev.hoses.map(h => {
+            if (h.id !== hose_id || h.waypoints.length <= 2) return h;
+            const newWp = h.waypoints.filter((_, i) => i !== waypointIndex);
+            return { ...h, waypoints: newWp };
+          }),
+        };
+        const hose = updated.hoses.find(h => h.id === hose_id);
+        if (hose) syncHoseEndpoint('PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+        return updated;
+      });
+    },
+    [],
+  );
+
+  /** Отправить PUT на бэк для конца рукава (вызывать после завершения редактирования). */
+  const syncHose = useCallback((hose_id: string) => {
+    setLayout(prev => {
+      const hose = prev.hoses.find(h => h.id === hose_id);
+      if (hose) syncHoseEndpoint('PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+      return prev; // не меняем state
+    });
+  }, []);
+
+  /** Отправить PUT на бэк после перемещения техники. */
+  const syncEquipment = useCallback((instance_id: string) => {
+    setLayout(prev => {
+      const eq = prev.placed_equipment.find(e => e.instance_id === instance_id);
+      if (eq) syncEquipmentEndpoint('PUT', instance_id, { x: eq.x, y: eq.y });
+      return prev;
+    });
   }, []);
 
   return {
@@ -207,6 +390,11 @@ export function useFireMapState() {
     moveBranching,
     deleteBranching,
     moveWaypoint,
+    revertHoseIfOverLimit,
+    insertWaypoint,
+    removeWaypoint,
     deleteHose,
+    syncHose,
+    syncEquipment,
   };
 }

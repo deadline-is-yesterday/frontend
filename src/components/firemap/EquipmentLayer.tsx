@@ -12,6 +12,7 @@ interface EquipmentLayerProps {
   mode: string;
   onSelect: (id: string) => void;
   onMove: (id: string, x: number, y: number) => void;
+  onMoveEnd?: (id: string) => void;
   /** Клик по свободному коннектору рукава. */
   onConnectorClick: (equipmentInstanceId: string, hoseSpec: HoseSpec, startX: number, startY: number) => void;
 }
@@ -28,6 +29,7 @@ export default function EquipmentLayer({
   mode,
   onSelect,
   onMove,
+  onMoveEnd,
   onConnectorClick,
 }: EquipmentLayerProps) {
   const dragState = useRef<{
@@ -71,13 +73,16 @@ export default function EquipmentLayer({
   };
 
   const handlePointerUp = () => {
-    dragState.current = null;
+    if (dragState.current) {
+      onMoveEnd?.(dragState.current.instanceId);
+      dragState.current = null;
+    }
   };
 
   return (
     <g>
       {placedEquipment.map(eq => {
-        const spec = specById(eq.equipment_id);
+        const spec = specById(eq.instance_id);
         const half = iconSize / 2;
         const isSelected = eq.instance_id === selectedId;
 
