@@ -4,7 +4,7 @@ import { Mic, MicOff, Radio } from 'lucide-react';
 import { Role } from '../types';
 
 const BACKEND_URL = import.meta.env.VITE_API_URL;
-const BUFFER_SIZE = 4096;
+const BUFFER_SIZE = 8192;
 
 interface Props {
   role: Role;
