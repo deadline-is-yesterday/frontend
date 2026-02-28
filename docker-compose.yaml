@@ -1,0 +1,13 @@
+services:
+  frontend:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=${VITE_API_URL}
+      - DISABLE_HMR=false
+    volumes:
+      - .:/app
+      - /app/node_modules # Чтобы локальные node_modules не затирали контейнерные
+    stdin_open: true # Аналог ключа -it для корректной работы Vite
+    tty: true

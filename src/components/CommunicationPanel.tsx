@@ -3,7 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { Mic, MicOff, Radio } from 'lucide-react';
 import { Role } from '../types';
 
-const BACKEND_URL = 'http://172.26.219.198:5000';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
 const BUFFER_SIZE = 4096;
 
 interface Props {
