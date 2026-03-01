@@ -91,6 +91,7 @@ export default function App() {
             setStationResources={setStationResources}
             targetAddress={targetAddress}
             setTargetAddress={setTargetAddress}
+            simState={fireSim.simState}
             fireSim={fireSim}
             onBack={() => setScreen('lobby')}
           />
@@ -103,8 +104,8 @@ export default function App() {
           />
         )}
         {activeRole === 'rtp' && <RTPView sharedLayout={sharedMapLayout} />}
-        {activeRole === 'squad' && <SquadView />}
-        {activeRole === 'chief' && <ChiefView simState={fireSim.simState} onShareLayout={setSharedMapLayout} />}
+        {activeRole === 'squad' && <SquadView simState={fireSim.simState} fireSim={fireSim} />}
+        {activeRole === 'chief' && <ChiefView simState={fireSim.simState} fireSim={fireSim} onShareLayout={setSharedMapLayout} />}
       </main>
 
       {/* Панель связи */}

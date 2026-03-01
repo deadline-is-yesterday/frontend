@@ -1,5 +1,6 @@
 import React, { useCallback, useRef } from 'react';
 import type { PlacedEquipment, EquipmentSpec, PlacedHose, HoseSpec } from '../../types/firemap';
+import type { SimTruck } from '../../types/firesim';
 import { iconUrl } from './iconUrl';
 
 interface EquipmentLayerProps {
@@ -10,6 +11,8 @@ interface EquipmentLayerProps {
   selectedId: string | null;
   zoom: number;
   mode: string;
+  /** Данные о машинах из симуляции (уровень воды и т.д.). */
+  simTrucks?: SimTruck[] | null;
   onSelect: (id: string) => void;
   onMove: (id: string, x: number, y: number) => void;
   onMoveEnd?: (id: string) => void;
@@ -27,6 +30,7 @@ export default function EquipmentLayer({
   selectedId,
   zoom,
   mode,
+  simTrucks,
   onSelect,
   onMove,
   onMoveEnd,
@@ -85,6 +89,7 @@ export default function EquipmentLayer({
         const spec = specById(eq.instance_id);
         const half = iconSize / 2;
         const isSelected = eq.instance_id === selectedId;
+        const truck = simTrucks?.find(t => t.id === eq.instance_id) ?? null;
 
         return (
           <g
@@ -146,6 +151,17 @@ export default function EquipmentLayer({
               </text>
             )}
 
+            {/* Индикатор уровня воды */}
+            {truck && truck.max_water > 0 && (
+              <WaterBar
+                water={truck.water}
+                maxWater={truck.max_water}
+                hydrantConnected={truck.hydrant_connected}
+                half={half}
+                zoom={zoom}
+              />
+            )}
+
             {/* Коннекторы рукавов — показываются на выбранной технике */}
             {isSelected && spec && (
               <Connectors
@@ -160,6 +176,63 @@ export default function EquipmentLayer({
           </g>
         );
       })}
+    </g>
+  );
+}
+
+/** Индикатор уровня воды под иконкой техники. */
+function WaterBar({
+  water,
+  maxWater,
+  hydrantConnected,
+  half,
+  zoom,
+}: {
+  water: number;
+  maxWater: number;
+  hydrantConnected: boolean;
+  half: number;
+  zoom: number;
+}) {
+  const pct = Math.max(0, Math.min(100, (water / maxWater) * 100));
+  const barW = half * 2;
+  const barH = 4 / zoom;
+  const barY = half + 2;
+  const fillColor = pct > 30 ? '#3b82f6' : pct > 10 ? '#eab308' : '#ef4444';
+
+  return (
+    <g>
+      {/* Фон */}
+      <rect
+        x={-half}
+        y={barY}
+        width={barW}
+        height={barH}
+        rx={barH / 2}
+        fill="#e2e8f0"
+      />
+      {/* Заполнение */}
+      <rect
+        x={-half}
+        y={barY}
+        width={barW * pct / 100}
+        height={barH}
+        rx={barH / 2}
+        fill={fillColor}
+      />
+      {/* Иконка гидранта если подключён */}
+      {hydrantConnected && (
+        <text
+          x={half + 4 / zoom}
+          y={barY + barH}
+          fontSize={8 / zoom}
+          fill="#06b6d4"
+          fontWeight="700"
+          style={{ pointerEvents: 'none' }}
+        >
+          H
+        </text>
+      )}
     </g>
   );
 }

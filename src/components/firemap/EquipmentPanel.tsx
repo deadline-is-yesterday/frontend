@@ -17,7 +17,7 @@ export default function EquipmentPanel({
 }: EquipmentPanelProps) {
   const available = equipment.filter(eq => !placedIds.includes(eq.id));
   return (
-    <div className="w-56 bg-white border-r border-slate-200 flex flex-col">
+    <div data-tour-id="equipment-panel" className="w-56 bg-white border-r border-slate-200 flex flex-col">
       <div className="px-3 py-2 border-b border-slate-200">
         <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
           Техника

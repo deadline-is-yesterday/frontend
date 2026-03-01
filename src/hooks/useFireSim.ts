@@ -26,6 +26,10 @@ export interface UseFireSimReturn {
   setSource: (payload: SetSourcePayload) => Promise<void>;
   resetSim: (payload: ResetPayload) => Promise<void>;
   fetchState: (mapId: string) => Promise<FireSimState | null>;
+  /** Сообщить бэку о подключении/отключении гидранта к машине */
+  setHydrantConnected: (truckId: string, connected: boolean) => void;
+  /** Сообщить бэку о включении/выключении полива */
+  setHoseState: (truckId: string, nozzleX: number, nozzleY: number, isOpen: boolean) => void;
 }
 
 export function useFireSim(mapId: string | null): UseFireSimReturn {
@@ -34,7 +38,11 @@ export function useFireSim(mapId: string | null): UseFireSimReturn {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    if (!mapId) return;
+    if (!mapId) {
+      setConnected(false);
+      setSimState(null);
+      return;
+    }
 
     const socket: FireSimSocket = io(`${API_BASE}/firesim`, {
       autoConnect: true,
@@ -114,5 +122,23 @@ export function useFireSim(mapId: string | null): UseFireSimReturn {
     }
   }, []);
 
-  return { simState, connected, startSim, setSource, resetSim, fetchState };
+  const setHydrantConnected = useCallback((truckId: string, connected: boolean) => {
+    socketRef.current?.emit('hydrant_update' as any, {
+      map_id: mapId,
+      truck_id: truckId,
+      connected,
+    });
+  }, [mapId]);
+
+  const setHoseState = useCallback((truckId: string, nozzleX: number, nozzleY: number, isOpen: boolean) => {
+    socketRef.current?.emit('hose_update' as any, {
+      map_id: mapId,
+      truck_id: truckId,
+      nozzle_x: nozzleX,
+      nozzle_y: nozzleY,
+      is_open: isOpen,
+    });
+  }, [mapId]);
+
+  return { simState, connected, startSim, setSource, resetSim, fetchState, setHydrantConnected, setHoseState };
 }

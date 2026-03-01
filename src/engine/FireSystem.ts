@@ -4,7 +4,7 @@
  * Сетка (grid): height × width.
  *   > 0  — температура (горит)
  *   == 0 — пустая клетка
- *   < 0  — стена (|value| = прочность)
+ *   < 0  — стена (|value| = прочность, разрушается от огня)
  */
 
 export interface FireTruckState {
@@ -12,9 +12,11 @@ export interface FireTruckState {
   x: number;
   y: number;
   water: number;
+  max_water: number;
   nozzle_x: number | null;
   nozzle_y: number | null;
   hose_open: boolean;
+  hydrant_connected: boolean;
 }
 
 export interface FireSimSnapshot {
@@ -29,7 +31,9 @@ export interface FireSimSnapshot {
     x: number;
     y: number;
     water: number;
+    max_water: number;
     hose_open: boolean;
+    hydrant_connected: boolean;
     hose_end: { x: number; y: number } | null;
   }>;
 }
@@ -55,7 +59,7 @@ export class FireSystem {
   // ── Setup ──────────────────────────────────────────────
 
   setWall(x: number, y: number, hp = -30): void {
-    this.grid[y][x] = hp;
+    this.grid[y][x] = hp !== 0 ? -Math.abs(hp) : -30;
   }
 
   setSource(x: number, y: number, intensity = 1000): void {
@@ -69,10 +73,12 @@ export class FireSystem {
       existing.x = x;
       existing.y = y;
       existing.water = water;
+      existing.max_water = water;
     } else {
       this.trucks.set(id, {
-        id, x, y, water,
+        id, x, y, water, max_water: water,
         nozzle_x: null, nozzle_y: null, hose_open: false,
+        hydrant_connected: false,
       });
     }
   }
@@ -83,6 +89,12 @@ export class FireSystem {
     truck.nozzle_x = nozzleX;
     truck.nozzle_y = nozzleY;
     truck.hose_open = isOpen;
+  }
+
+  setHydrantConnected(truckId: string, connected: boolean): void {
+    const truck = this.trucks.get(truckId);
+    if (!truck) return;
+    truck.hydrant_connected = connected;
   }
 
   // ── Ray-cast для воды ──────────────────────────────────
@@ -165,10 +177,24 @@ export class FireSystem {
     this.ticks++;
     if (this.ticks % this.speedN !== 0) return false;
 
+    // Фаза 0: пополнение бака от гидранта
+    const HYDRANT_REFILL_RATE = 200;
+    for (const truck of this.trucks.values()) {
+      if (truck.hydrant_connected && !truck.hose_open) {
+        truck.water = Math.min(truck.max_water, truck.water + HYDRANT_REFILL_RATE);
+      }
+    }
+
     // Фаза 1: тушение
     this.activeWater.clear();
     for (const truck of this.trucks.values()) {
-      if (truck.hose_open) this.applyWater(truck);
+      if (truck.hose_open) {
+        if (truck.water <= 0) {
+          truck.hose_open = false;
+          continue;
+        }
+        this.applyWater(truck);
+      }
     }
 
     // Фаза 2: распространение огня
@@ -189,6 +215,22 @@ export class FireSystem {
           continue;
         }
 
+        // Стена — разрушается от огня
+        if (current < 0) {
+          let hasFireNeighbor = false;
+          for (let dy = -1; dy <= 1 && !hasFireNeighbor; dy++) {
+            for (let dx = -1; dx <= 1 && !hasFireNeighbor; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = x + dx, ny = y + dy;
+              if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
+                if (this.grid[ny][nx] > 0) hasFireNeighbor = true;
+              }
+            }
+          }
+          newGrid[y][x] = hasFireNeighbor ? current + 1 : current;
+          continue;
+        }
+
         // Обычная клетка
         if (current >= 0) {
           let sum = 0;
@@ -199,7 +241,13 @@ export class FireSystem {
               if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
                 if (!this.activeWater.has(`${nx},${ny}`)) {
                   const val = this.grid[ny][nx];
-                  if (val > 0) sum += val;
+                  if (val > 0) {
+                    // Диагональное распространение блокируется стеной
+                    if (dx !== 0 && dy !== 0) {
+                      if (this.grid[y][nx] < 0 || this.grid[ny][x] < 0) continue;
+                    }
+                    sum += val;
+                  }
                 }
               }
             }
@@ -208,22 +256,6 @@ export class FireSystem {
           let newTemp = Math.max(current, mean);
           if (newTemp > 0) newTemp += 1;
           newGrid[y][x] = Math.round(newTemp * 100) / 100;
-          continue;
-        }
-
-        // Стена
-        if (current < 0) {
-          let nearFire = false;
-          outer: for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              if (dx === 0 && dy === 0) continue;
-              const nx = x + dx, ny = y + dy;
-              if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
-                if (this.grid[ny][nx] > 0) { nearFire = true; break outer; }
-              }
-            }
-          }
-          newGrid[y][x] = nearFire ? current + 1 : current;
         }
       }
     }
@@ -256,8 +288,8 @@ export class FireSystem {
     const trucks: FireSimSnapshot['trucks'] = [];
     for (const t of this.trucks.values()) {
       trucks.push({
-        id: t.id, x: t.x, y: t.y, water: t.water,
-        hose_open: t.hose_open,
+        id: t.id, x: t.x, y: t.y, water: t.water, max_water: t.max_water,
+        hose_open: t.hose_open, hydrant_connected: t.hydrant_connected,
         hose_end: t.nozzle_x != null && t.nozzle_y != null
           ? { x: t.nozzle_x, y: t.nozzle_y } : null,
       });

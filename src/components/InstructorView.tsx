@@ -1,18 +1,16 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   BrickWall, Eraser, 
   Play, Pause, Grid3X3, Image as ImageIcon,
-  Settings, Trash2, Undo, Redo,
-  Thermometer, Wind, Eye, EyeOff, Wand2,
+  Trash2, Undo, Redo,
+  Eye, EyeOff, Wand2,
   DoorOpen, AppWindow, Layers, Ban, Truck, Navigation, Crosshair, Ruler, Edit2,
   Droplets, Save, ArrowLeft, Check, Mic
 } from 'lucide-react';
 import { ScenarioState, Zone, ZoneType, Point, CallerDifficulty } from '../types';
-import { useLocalFireSim } from '../hooks/useLocalFireSim';
-import { useGame, type VehicleType } from '../hooks/useGame';
+import { useGame } from '../hooks/useGame';
 import type { UseFireSimReturn } from '../hooks/useFireSim';
-import type { StartSimPayload } from '../types/firesim';
-import CompassControl from './CompassControl';
+import type { FireSimState } from '../types/firesim';
 
 // --- ЗАГЛУШКИ ДЛЯ БЭКЕНДА ---
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:5000';
@@ -81,6 +79,7 @@ interface InstructorViewProps {
   targetAddress: string;
   setTargetAddress: (addr: string) => void;
   setMapScale?: (scale: number) => void;
+  simState: FireSimState | null;
   fireSim: UseFireSimReturn;
   onBack?: () => void;
 }
@@ -118,7 +117,7 @@ export default function InstructorView({
     scenario, setScenario, zones, setZones,
     stationResources, setStationResources,
     targetAddress, setTargetAddress,
-    setMapScale, fireSim, onBack
+    setMapScale, simState, fireSim, onBack
 }: InstructorViewProps) {
   
   const [activeTab, setActiveTab] = useState<'map' | 'resources'>('map');
@@ -141,7 +140,6 @@ export default function InstructorView({
   const [selectedTool, setSelectedTool] = useState<CellType | 'ruler' | 'hydrant' | null>('wall');
   const [isDrawing, setIsDrawing] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  const localSim = useLocalFireSim();
   const [showGridLines, setShowGridLines] = useState(true);
   const [showMapImage, setShowMapImage] = useState(true);
   const [showStructures, setShowStructures] = useState(true);
@@ -168,6 +166,27 @@ export default function InstructorView({
   useEffect(() => { selectedToolRef.current = selectedTool; }, [selectedTool]);
   useEffect(() => { isDrawingRef.current = isDrawing; }, [isDrawing]);
   useEffect(() => { eraserSizeRef.current = eraserSize; }, [eraserSize]);
+  useEffect(() => { setIsPlaying(scenario.simulationStarted); }, [scenario.simulationStarted]);
+
+  const renderGrid = useMemo<CellType[][]>(() => {
+    if (!isPlaying || !simState?.grid) return grid;
+
+    const waterSet = new Set(simState.active_water.map(w => `${w.y}:${w.x}`));
+    return Array.from({ length: gridRows }, (_, y) =>
+      Array.from({ length: resolution }, (_, x) => {
+        const base = grid[y]?.[x] ?? 'empty';
+        // Пользовательские проемы сохраняем поверх live-симуляции
+        if (base === 'door' || base === 'window') return base;
+        if (waterSet.has(`${y}:${x}`)) return 'water';
+
+        const simCell = simState.grid[y]?.[x];
+        if (typeof simCell !== 'number') return base;
+        if (simCell < 0) return 'wall';
+        if (simCell > 0) return 'fire';
+        return 'empty';
+      }),
+    );
+  }, [isPlaying, simState, grid, gridRows, resolution]);
 
   // ── Загрузка данных при маунте ──────────────────────────────────────────
   useEffect(() => {
@@ -724,7 +743,7 @@ export default function InstructorView({
             {saveStatus === 'saving' ? 'Сохранение...' : saveStatus === 'saved' ? 'Сохранено' : 'Сохранить'}
           </button>
 
-          <button onClick={() => {
+          <button onClick={async () => {
             const next = !isPlaying;
             setIsPlaying(next);
             setScenario({ ...scenario, simulationStarted: next });
@@ -737,12 +756,19 @@ export default function InstructorView({
                   else if (grid[y][x] === 'fire') sources.push({ x, y, intensity: 1000 });
                 }
               }
-              localSim.start({ width: resolution, height: gridRows, walls, sources });
+              await fireSim.startSim({
+                map_id: 'default',
+                width: resolution,
+                height: gridRows,
+                walls,
+                sources,
+                trucks: [],
+              }).catch(() => {});
               // Стабы бэкенда
               sendScenarioSettings(scenario);
               startCallerAI(scenario.callerDifficulty, targetAddress);
             } else {
-              localSim.stop();
+              await fireSim.resetSim({ map_id: 'default' }).catch(() => {});
             }
           }} className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-xs transition-all shadow-md border ${isPlaying ? 'bg-red-50 text-red-500 border-red-200 animate-pulse' : 'bg-green-600 text-white border-green-600 hover:bg-green-500'}`}>
             {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />} {isPlaying ? 'АКТИВНО' : 'ЗАПУСК'}
@@ -756,28 +782,17 @@ export default function InstructorView({
               {!mapImage && showMapImage && <div className="absolute inset-0 flex items-center justify-center text-slate-300 pointer-events-none border-2 border-dashed border-slate-300"><span className="text-2xl font-black opacity-20 rotate-[-12deg] tracking-widest">НЕТ СХЕМЫ</span></div>}
 
               <div className="absolute inset-0 z-10" style={{ display: 'grid', gridTemplateColumns: `repeat(${resolution}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)` }}>
-                {grid.map((row, y) => row.map((cell, x) => (
+                {renderGrid.map((row, y) => row.map((cell, x) => (
                     <Cell key={`${y}-${x}`} type={cell} x={x} y={y} onMouseDown={handleMouseDown} onMouseEnter={handleMouseEnter} showStructures={showStructures} showGridLines={showGridLines} />
                 )))}
               </div>
 
-              {isPlaying && localSim.snapshot?.grid && (
-                <div className="absolute inset-0 z-[15] pointer-events-none" style={{ display: 'grid', gridTemplateColumns: `repeat(${resolution}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)` }}>
-                  {localSim.snapshot.grid.map((row, y) =>
-                    row.map((temp, x) => {
-                      if (temp <= 0) return <div key={`t-${y}-${x}`} />;
-                      if (temp < 0) return <div key={`t-${y}-${x}`} style={{ backgroundColor: 'rgba(100,100,100,0.7)' }} />;
-                      const t = Math.min(temp / 800, 1);
-                      const g = Math.round(255 * (1 - t * 0.8));
-                      const a = 0.2 + t * 0.6;
-                      return <div key={`t-${y}-${x}`} style={{ backgroundColor: `rgba(255,${g},0,${a})` }} />;
-                    })
-                  )}
-                </div>
-              )}
-
               <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none z-20">
-                  {zones.map(zone => <ZoneRenderer key={zone.id} zone={zone} />)}
+                  {zones.map(zone => (
+                    <g key={zone.id}>
+                      <ZoneRenderer zone={zone} />
+                    </g>
+                  ))}
                   {/* Гидранты */}
                   {hydrants.map(h => {
                     const r = currentScale ? Math.max(4, 6 / (currentScale * 10)) : 6;
@@ -813,59 +828,6 @@ export default function InstructorView({
                   </div>
               )}
             </div>
-        </div>
-      </div>
-      
-      {/* ПРАВАЯ ПАНЕЛЬ */}
-      <div className="w-72 border-l border-slate-200 bg-white p-4 flex flex-col gap-6 overflow-y-auto z-10 shrink-0">
-        <div>
-            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><Settings className="w-3 h-3" /> Условия Среды</h3>
-            <div className="space-y-3 bg-slate-50 p-3 rounded border border-slate-200">
-                <div>
-                  <label className="text-[10px] text-slate-500 mb-1 flex items-center gap-1"><Thermometer className="w-3 h-3"/> Температура (°C)</label>
-                  <input type="number" step="0.1" value={scenario.temperature} onChange={e => setScenario({...scenario, temperature: Number(e.target.value)})} className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-sm text-slate-800 focus:border-blue-500 outline-none" />
-                </div>
-                <div>
-                    <label className="text-[10px] text-slate-500 mb-1 flex items-center gap-1"><Wind className="w-3 h-3"/> Ветер (м/с)</label>
-                    <input type="number" step="0.1" value={scenario.windSpeed} onChange={e => setScenario({...scenario, windSpeed: Number(e.target.value)})} className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-sm text-slate-800 focus:border-blue-500 outline-none" />
-                </div>
-                <div className="pt-2 flex justify-center">
-                    <CompassControl label="Направление" value={scenario.windDirection} onChange={(val) => setScenario({...scenario, windDirection: val})} color="blue" />
-                </div>
-            </div>
-        </div>
-        <div className="flex-1">
-           {/* "Вводные события" убраны по запросу */}
-
-           {!isPlaying && (
-             <button onClick={() => {
-               const newGrid: CellType[][] = Array.from({ length: gridRows }, () => new Array(resolution).fill('empty'));
-               const wallMinX = Math.floor(resolution * 0.15);
-               const wallMaxX = Math.floor(resolution * 0.85);
-               const wallMinY = Math.floor(gridRows * 0.15);
-               const wallMaxY = Math.floor(gridRows * 0.7);
-               for (let x = wallMinX; x <= wallMaxX; x++) { newGrid[wallMinY][x] = 'wall'; newGrid[wallMaxY][x] = 'wall'; }
-               for (let y = wallMinY; y <= wallMaxY; y++) { newGrid[y][wallMinX] = 'wall'; newGrid[y][wallMaxX] = 'wall'; }
-               const doorX = Math.floor((wallMinX + wallMaxX) / 2);
-               newGrid[wallMaxY][doorX] = 'door'; newGrid[wallMaxY][doorX + 1] = 'door';
-               const fireX = Math.floor(resolution * 0.35);
-               const fireY = Math.floor(gridRows * 0.4);
-               newGrid[fireY][fireX] = 'fire';
-
-               setGrid(newGrid);
-               // Демо-сценарий не чистит гидранты, но сохраняем в историю
-               pushHistory(newGrid, zones, hydrants);
-             }} className="mt-3 w-full px-3 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-bold hover:bg-amber-100 transition-colors">
-               Демо-сценарий
-             </button>
-           )}
-           {isPlaying && localSim.snapshot && (
-             <div className="mt-3 bg-slate-50 p-3 rounded border border-slate-200 space-y-1">
-               <div className="text-[10px] text-slate-500">Тик: <span className="font-bold text-slate-800">{localSim.snapshot.ticks}</span></div>
-               <div className="text-[10px] text-slate-500">Источников: <span className="font-bold text-red-600">{localSim.snapshot.sources.length}</span></div>
-               <div className="text-[10px] text-slate-500">Макс. t°: <span className="font-bold text-orange-600">{Math.round(Math.max(...localSim.snapshot.grid.flat()))}°</span></div>
-             </div>
-           )}
         </div>
       </div>
     </div>
