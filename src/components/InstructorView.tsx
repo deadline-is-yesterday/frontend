@@ -5,31 +5,13 @@ import {
   Settings, Trash2, Undo, Redo,
   Thermometer, Wind, Zap, Eye, EyeOff, Wand2,
   DoorOpen, AppWindow, Layers, Ban, Truck, Navigation, Crosshair, Ruler, Edit2,
-  Droplets
+  Droplets, Save, ArrowLeft, Check
 } from 'lucide-react';
 import { ScenarioState, Zone, ZoneType, Point } from '../types';
+import { useGame, type VehicleType } from '../hooks/useGame';
 import type { UseFireSimReturn } from '../hooks/useFireSim';
 import type { StartSimPayload } from '../types/firesim';
 import CompassControl from './CompassControl';
-
-// --- ТИПЫ ТЕХНИКИ ---
-export type VehicleType = {
-  id: string;
-  name: string;
-  capacity: number;
-  type: 'AC' | 'AL' | 'ASA' | 'ASH';
-};
-
-export const AVAILABLE_VEHICLES: VehicleType[] = [
-  { id: 'ac40_130', name: 'АЦ-40 (130) 63Б', capacity: 2.35, type: 'AC' },
-  { id: 'ac40_131', name: 'АЦ-40 (131) 137А', capacity: 2.4, type: 'AC' },
-  { id: 'ac32_43253', name: 'АЦ-3,2-40 (43253)', capacity: 3.2, type: 'AC' },
-  { id: 'ac50_43118', name: 'АЦ-5,0-40 (43118)', capacity: 5.0, type: 'AC' },
-  { id: 'ac60_5557', name: 'АЦ-6,0-40 (Урал-5557)', capacity: 6.0, type: 'AC' },
-  { id: 'al_30', name: 'АЛ-30 (Автолестница)', capacity: 0, type: 'AL' },
-  { id: 'asa_20', name: 'АСА-20 (Спасательный)', capacity: 0, type: 'ASA' },
-  { id: 'ash_uaz', name: 'АШ (Штабной УАЗ)', capacity: 0, type: 'ASH' },
-];
 
 type CellType = 'empty' | 'wall' | 'fire' | 'water' | 'door' | 'window';
 
@@ -44,6 +26,7 @@ interface InstructorViewProps {
   setTargetAddress: (addr: string) => void;
   setMapScale?: (scale: number) => void;
   fireSim: UseFireSimReturn;
+  onBack?: () => void;
 }
 
 // Компонент клетки
@@ -84,7 +67,7 @@ export default function InstructorView({
     scenario, setScenario, zones, setZones,
     stationResources, setStationResources,
     targetAddress, setTargetAddress,
-    setMapScale, fireSim
+    setMapScale, fireSim, onBack
 }: InstructorViewProps) {
   
   const [activeTab, setActiveTab] = useState<'map' | 'resources'>('map');
@@ -95,6 +78,8 @@ export default function InstructorView({
 
   const [mapImage, setMapImage] = useState<string | null>(null);
   const [grid, setGrid] = useState<CellType[][]>([]);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
   
   const [threshold, setThreshold] = useState(120);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
@@ -121,8 +106,83 @@ export default function InstructorView({
   const selectedToolRef = useRef(selectedTool);
   const isDrawingRef = useRef(isDrawing);
 
+  const game = useGame();
+  const debounceRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
   useEffect(() => { selectedToolRef.current = selectedTool; }, [selectedTool]);
   useEffect(() => { isDrawingRef.current = isDrawing; }, [isDrawing]);
+
+  // ── Загрузка данных при маунте ──────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const [gridData, scenarioData, vehicleTypesData, planUrl] = await Promise.all([
+        game.loadGrid(),
+        game.loadScenario(),
+        game.loadVehicleTypes(),
+        game.loadPlan(),
+      ]);
+      if (cancelled) return;
+      if (planUrl) {
+        setMapImage(planUrl);
+      }
+      if (vehicleTypesData.length > 0) {
+        setVehicleTypes(vehicleTypesData);
+        // Счётчики из БД (count = текущее кол-во машин в vehicles)
+        const counts: Record<string, number> = {};
+        vehicleTypesData.forEach(v => { counts[v.key] = v.count; });
+        setStationResources(counts);
+      }
+      if (gridData && gridData.grid.length > 0) {
+        setResolution(gridData.resolution);
+        setAspectRatio(gridData.aspect_ratio);
+        setGridRows(gridData.grid_rows);
+        setGrid(gridData.grid);
+        if (gridData.scale_m_per_px) {
+          setCurrentScale(gridData.scale_m_per_px);
+          if (setMapScale) setMapScale(gridData.scale_m_per_px);
+        }
+      }
+      if (scenarioData) {
+        setScenario({
+          ...scenario,
+          temperature: scenarioData.temperature,
+          windSpeed: scenarioData.wind_speed,
+          windDirection: scenarioData.wind_direction,
+        });
+        setTargetAddress(scenarioData.target_address);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Автосохранение сценария (debounce 500ms) ──────────────────────────────
+  const initialLoadRef = useRef(true);
+  useEffect(() => {
+    if (initialLoadRef.current) return;
+    clearTimeout(debounceRef.current['scenario']);
+    debounceRef.current['scenario'] = setTimeout(() => {
+      game.saveScenario({
+        temperature: scenario.temperature,
+        wind_speed: scenario.windSpeed,
+        wind_direction: scenario.windDirection,
+        target_address: targetAddress,
+      });
+    }, 500);
+  }, [scenario.temperature, scenario.windSpeed, scenario.windDirection, targetAddress]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Автосохранение депо (debounce 500ms) ──────────────────────────────────
+  useEffect(() => {
+    if (initialLoadRef.current) return;
+    clearTimeout(debounceRef.current['depot']);
+    debounceRef.current['depot'] = setTimeout(() => {
+      game.saveDepot(stationResources);
+    }, 500);
+  }, [stationResources]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Снимаем флаг после первого рендера, чтобы не тригерить save при загрузке
+  useEffect(() => { initialLoadRef.current = false; }, []);
 
   const selectObjectTool = (tool: CellType) => {
     setSelectedTool(tool);
@@ -200,6 +260,8 @@ export default function InstructorView({
           setShowCalibrationModal(false);
           setCalibrationPoints([]);
           selectObjectTool('wall');
+          // Сохраняем масштаб на бэк вместе с текущим grid
+          game.saveGrid({ resolution, grid_rows: gridRows, aspect_ratio: aspectRatio, grid, scale_m_per_px: scale });
       } else {
           alert("Некорректное значение дистанции");
       }
@@ -255,6 +317,9 @@ export default function InstructorView({
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      // Загружаем на бэк
+      game.uploadPlan(file).catch(() => {});
+
       const reader = new FileReader();
       reader.onload = (event) => {
         const img = new Image();
@@ -277,6 +342,15 @@ export default function InstructorView({
     setHistory(newHistory);
     setHistoryStep(newHistory.length - 1);
     setGrid(newGrid);
+
+    // Сохраняем grid на бэк (fire-and-forget)
+    game.saveGrid({
+      resolution,
+      grid_rows: gridRows,
+      aspect_ratio: aspectRatio,
+      grid: newGrid,
+      scale_m_per_px: currentScale,
+    });
   };
 
   const undo = () => {
@@ -305,6 +379,21 @@ export default function InstructorView({
           if(setMapScale) setMapScale(1);
           setZones([]); 
       }
+  };
+
+  const handleSaveAll = async () => {
+    setSaveStatus('saving');
+    try {
+      await Promise.all([
+        game.saveGrid({ resolution, grid_rows: gridRows, aspect_ratio: aspectRatio, grid, scale_m_per_px: currentScale }),
+        game.saveScenario({ temperature: scenario.temperature, wind_speed: scenario.windSpeed, wind_direction: scenario.windDirection, target_address: targetAddress }),
+        game.saveDepot(stationResources),
+      ]);
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    } catch {
+      setSaveStatus('idle');
+    }
   };
 
   const handleMouseDown = useCallback((y: number, x: number) => {
@@ -410,16 +499,19 @@ export default function InstructorView({
                 <div>
                     <div className="text-[10px] font-bold text-slate-400 uppercase mb-3 flex items-center gap-2"><Truck className="w-3 h-3" /> Конфигурация Депо</div>
                     <div className="space-y-3">
-                        {AVAILABLE_VEHICLES.map(v => (
-                            <div key={v.id} className="bg-white p-3 rounded border border-slate-200 flex items-center justify-between hover:border-blue-300 transition-colors shadow-sm">
+                        {vehicleTypes.length === 0 && <div className="text-xs text-slate-400 text-center py-4">Загрузка техники...</div>}
+                        {vehicleTypes.map(v => (
+                            <div key={v.key} className="bg-white p-3 rounded border border-slate-200 flex items-center justify-between hover:border-blue-300 transition-colors shadow-sm">
                                 <div className="flex-1 min-w-0 pr-2">
                                     <div className="text-xs font-bold text-slate-800 truncate">{v.name}</div>
-                                    <div className="text-[10px] text-slate-500">{v.capacity > 0 ? `Вода: ${v.capacity}т` : 'Спецтехника'}</div>
+                                    <div className="text-[10px] text-slate-500">
+                                        {v.water_capacity_l > 0 ? `Вода: ${(v.water_capacity_l / 1000).toFixed(1)}т` : v.ladder_height_m ? `Лестница: ${v.ladder_height_m}м` : 'Спецтехника'}
+                                    </div>
                                 </div>
                                 <div className="flex items-center gap-2 bg-slate-50 rounded p-1 border border-slate-200">
-                                    <button onClick={() => setStationResources({...stationResources, [v.id]: Math.max(0, (stationResources[v.id] || 0) - 1)})} className="w-6 h-6 rounded bg-white text-slate-500 hover:text-blue-600 border border-slate-200 flex items-center justify-center">-</button>
-                                    <span className="w-6 text-center text-sm font-mono font-bold text-blue-600">{stationResources[v.id] || 0}</span>
-                                    <button onClick={() => setStationResources({...stationResources, [v.id]: (stationResources[v.id] || 0) + 1})} className="w-6 h-6 rounded bg-white text-slate-500 hover:text-blue-600 border border-slate-200 flex items-center justify-center">+</button>
+                                    <button onClick={() => setStationResources({...stationResources, [v.key]: Math.max(0, (stationResources[v.key] || 0) - 1)})} className="w-6 h-6 rounded bg-white text-slate-500 hover:text-blue-600 border border-slate-200 flex items-center justify-center">-</button>
+                                    <span className="w-6 text-center text-sm font-mono font-bold text-blue-600">{stationResources[v.key] || 0}</span>
+                                    <button onClick={() => setStationResources({...stationResources, [v.key]: (stationResources[v.key] || 0) + 1})} className="w-6 h-6 rounded bg-white text-slate-500 hover:text-blue-600 border border-slate-200 flex items-center justify-center">+</button>
                                 </div>
                             </div>
                         ))}
@@ -475,6 +567,18 @@ export default function InstructorView({
             </div>
           </div>
 
+          <div className="flex items-center gap-3">
+          {onBack && (
+            <button onClick={onBack} className="flex items-center gap-1.5 px-4 py-2.5 rounded-lg text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-all border border-slate-200">
+              <ArrowLeft className="w-4 h-4" /> Назад
+            </button>
+          )}
+
+          <button onClick={handleSaveAll} disabled={saveStatus === 'saving'} className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-xs transition-all shadow-sm border ${saveStatus === 'saved' ? 'bg-green-50 text-green-600 border-green-200' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'}`}>
+            {saveStatus === 'saved' ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+            {saveStatus === 'saving' ? 'Сохранение...' : saveStatus === 'saved' ? 'Сохранено' : 'Сохранить'}
+          </button>
+
           <button onClick={async () => {
             const next = !isPlaying;
             setIsPlaying(next);
@@ -510,6 +614,7 @@ export default function InstructorView({
           }} className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-xs transition-all shadow-md border ${isPlaying ? 'bg-red-50 text-red-500 border-red-200 animate-pulse' : 'bg-green-600 text-white border-green-600 hover:bg-green-500'}`}>
             {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />} {isPlaying ? 'АКТИВНО' : 'ЗАПУСК'}
           </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-auto bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] bg-slate-50 p-10 flex items-start justify-center">

@@ -5,12 +5,16 @@ import RTPView from './components/RTPView';
 import SquadView from './components/SquadView';
 import ChiefView from './components/ChiefView';
 import CommunicationPanel from './components/CommunicationPanel';
+import LobbyScreen from './components/LobbyScreen';
 import { useSocket } from './hooks/useSocket';
 import { useFireSim } from './hooks/useFireSim';
 import { Role, ScenarioState, Zone } from './types';
 
+type Screen = 'lobby' | 'session';
+
 export default function App() {
   const { socketRef, connected } = useSocket();
+  const [screen, setScreen] = useState<Screen>('lobby');
   const [activeRole, setActiveRole] = useState<Role>('instructor');
 
   // --- ГЛОБАЛЬНОЕ СОСТОЯНИЕ СЦЕНАРИЯ ---
@@ -30,12 +34,7 @@ export default function App() {
   const [zones, setZones] = useState<Zone[]>([]);
 
   // Состояние ресурсов в депо (общие данные)
-  const [stationResources, setStationResources] = useState<Record<string, number>>({
-    'ac40_130': 2,
-    'ac40_131': 1,
-    'al_30': 1,
-    'ash_uaz': 1
-  });
+  const [stationResources, setStationResources] = useState<Record<string, number>>({});
 
   // Целевой адрес (задается руководителем, угадывается диспетчером)
   const [targetAddress, setTargetAddress] = useState<string>("");
@@ -43,6 +42,23 @@ export default function App() {
   // Симуляция огня — подключаемся только когда симуляция запущена
   const fireSim = useFireSim(scenario.simulationStarted ? 'default' : null);
 
+  const handleEnterSession = (_gameId: string) => {
+    setScreen('session');
+  };
+
+  // ── Лобби ──────────────────────────────────────────────────────────────────
+  if (screen === 'lobby') {
+    return (
+      <div className="h-screen bg-slate-50">
+        <LobbyScreen
+          onCreateGame={handleEnterSession}
+          onOpenGame={handleEnterSession}
+        />
+      </div>
+    );
+  }
+
+  // ── Сессия ─────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       {/* Шапка */}
@@ -71,6 +87,7 @@ export default function App() {
             targetAddress={targetAddress}
             setTargetAddress={setTargetAddress}
             fireSim={fireSim}
+            onBack={() => setScreen('lobby')}
           />
         )}
         {activeRole === 'dispatcher' && (

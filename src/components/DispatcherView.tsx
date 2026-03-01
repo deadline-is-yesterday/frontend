@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Truck, PhoneCall, Radio, PhoneOff, Mic, Navigation, MapPin, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { YMaps, Map, Placemark } from '@pbe/react-yandex-maps';
 import { ScenarioState } from '../types';
-import { AVAILABLE_VEHICLES } from './InstructorView';
+import { useGame, type VehicleType } from '../hooks/useGame';
 
 interface DispatcherViewProps {
   scenario: ScenarioState;
@@ -23,6 +23,10 @@ export default function DispatcherView({ scenario, stationResources, correctAddr
   const [dispatchedVehicles, setDispatchedVehicles] = useState<Record<string, number>>({});
   const [isCalculated, setIsCalculated] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
+
+  const game = useGame();
+  useEffect(() => { game.loadVehicleTypes().then(setVehicleTypes); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mapPoints = React.useMemo(() => {
       // Добавляем правильный адрес только если симуляция запущена, для теста
@@ -190,19 +194,19 @@ export default function DispatcherView({ scenario, stationResources, correctAddr
             </div>
 
             <div className="flex-1 overflow-y-auto mb-3 pr-2 grid grid-cols-2 gap-2">
-                {AVAILABLE_VEHICLES.map(v => {
-                    const available = stationResources[v.id] || 0;
-                    const selected = dispatchedVehicles[v.id] || 0;
+                {vehicleTypes.map(v => {
+                    const available = stationResources[v.key] || 0;
+                    const selected = dispatchedVehicles[v.key] || 0;
                     return (
-                        <div key={v.id} className={`flex items-center justify-between p-2 rounded border transition-all ${selected > 0 ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-200'} ${available === 0 ? 'opacity-40 pointer-events-none bg-slate-50' : ''}`}>
+                        <div key={v.key} className={`flex items-center justify-between p-2 rounded border transition-all ${selected > 0 ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-200'} ${available === 0 ? 'opacity-40 pointer-events-none bg-slate-50' : ''}`}>
                             <div className="min-w-0 pr-2">
                                 <div className="text-xs font-bold text-slate-800 truncate" title={v.name}>{v.name}</div>
                                 <div className="text-[10px] text-slate-500">В резерве: {available}</div>
                             </div>
                             <div className="flex items-center gap-2 bg-slate-50 rounded px-1 py-0.5 border border-slate-200 shrink-0">
-                                <button onClick={() => adjustDispatch(v.id, -1)} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-blue-600">-</button>
+                                <button onClick={() => adjustDispatch(v.key, -1)} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-blue-600">-</button>
                                 <span className={`text-sm font-bold w-4 text-center ${selected > 0 ? 'text-blue-600' : 'text-slate-400'}`}>{selected}</span>
-                                <button onClick={() => adjustDispatch(v.id, 1)} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-blue-600">+</button>
+                                <button onClick={() => adjustDispatch(v.key, 1)} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-blue-600">+</button>
                             </div>
                         </div>
                     );
