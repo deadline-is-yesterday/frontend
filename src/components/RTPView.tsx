@@ -37,7 +37,7 @@ export default function RTPView({ sharedLayout }: RTPViewProps) {
       <div className="flex-1 flex flex-col">
         {sharedLayout ? (
           <FireMapView
-            dataPrefix="/firemaps"
+            dataPrefix="/headquarters"
             readOnly
             initialLayout={sharedLayout}
           />
