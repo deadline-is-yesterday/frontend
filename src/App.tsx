@@ -25,6 +25,7 @@ export default function App() {
     incidentLocation: null,
     simulationStarted: false,
     triggerType: 'call',
+    callerDifficulty: 'level1', // Обновлено
   });
 
   // Состояние карты и зон

@@ -22,6 +22,9 @@ export type Zone = {
   floor: number;
 };
 
+// Обновили до 5 уровней
+export type CallerDifficulty = 'level1' | 'level2' | 'level3' | 'level4' | 'level5';
+
 export type ScenarioState = {
   temperature: number;
   windDirection: number;
@@ -32,4 +35,5 @@ export type ScenarioState = {
   incidentLocation: [number, number] | null;
   simulationStarted: boolean;
   triggerType: 'call' | 'sensor';
+  callerDifficulty: CallerDifficulty;
 };

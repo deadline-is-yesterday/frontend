@@ -3,15 +3,43 @@ import {
   BrickWall, Eraser, 
   Play, Pause, Grid3X3, Image as ImageIcon,
   Settings, Trash2, Undo, Redo,
-  Thermometer, Wind, Zap, Eye, EyeOff, Wand2,
+  Thermometer, Wind, Eye, EyeOff, Wand2,
   DoorOpen, AppWindow, Layers, Ban, Truck, Navigation, Crosshair, Ruler, Edit2,
-  Droplets
+  Droplets, Mic
 } from 'lucide-react';
-import { ScenarioState, Zone, ZoneType, Point } from '../types';
+import { ScenarioState, Zone, ZoneType, Point, CallerDifficulty } from '../types';
 import { useLocalFireSim } from '../hooks/useLocalFireSim';
 import CompassControl from './CompassControl';
 
-// --- ТИПЫ ТЕХНИКИ ---
+// --- ЗАГЛУШКИ ДЛЯ БЭКЕНДА ---
+const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:5000';
+
+export async function sendScenarioSettings(scenario: ScenarioState) {
+  console.log('[STUB] POST /api/scenario/settings', scenario);
+  return fetch(`${API_BASE}/api/scenario/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(scenario),
+  }).catch(() => console.warn('[STUB] Backend not available'));
+}
+
+export async function startCallerAI(difficulty: CallerDifficulty, address: string) {
+  console.log('[STUB] POST /api/caller/start', { difficulty, address });
+  return fetch(`${API_BASE}/api/caller/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ difficulty, address }),
+  }).catch(() => console.warn('[STUB] Backend not available'));
+}
+
+const DIFFICULTY_OPTIONS: { value: CallerDifficulty; label: string; desc: string }[] = [
+  { value: 'level1', label: 'Уровень 1: Новичок', desc: 'Четко, ясно, без паники.' },
+  { value: 'level2', label: 'Уровень 2: Очевидец', desc: 'Сбивчиво, но понятно.' },
+  { value: 'level3', label: 'Уровень 3: Стресс', desc: 'Путается, волнуется, ошибки в деталях.' },
+  { value: 'level4', label: 'Уровень 4: Паника', desc: 'Крики, противоречия, не слышит вопросов.' },
+  { value: 'level5', label: 'Уровень 5: Хаос', desc: 'Неадекват, шок, полная дезориентация.' },
+];
+
 export type VehicleType = {
   id: string;
   name: string;
@@ -31,6 +59,14 @@ export const AVAILABLE_VEHICLES: VehicleType[] = [
 ];
 
 type CellType = 'empty' | 'wall' | 'fire' | 'water' | 'door' | 'window';
+type HydrantPoint = { id: string; xPct: number; yPct: number };
+
+// Структура для истории
+type HistoryState = {
+    grid: CellType[][];
+    zones: Zone[];
+    hydrants: HydrantPoint[];
+};
 
 interface InstructorViewProps {
   scenario: ScenarioState;
@@ -44,7 +80,6 @@ interface InstructorViewProps {
   setMapScale?: (scale: number) => void;
 }
 
-// Компонент клетки
 const Cell = React.memo(({ 
   type, x, y, onMouseDown, onMouseEnter, showStructures, showGridLines 
 }: { 
@@ -60,15 +95,11 @@ const Cell = React.memo(({
       onMouseEnter={() => onMouseEnter(y, x)}
       className={`relative ${showGridLines ? 'border-[0.5px] border-slate-300/50' : ''}`}
     >
-        {/* СТЕНЫ */}
         {showStructures && type === 'wall' && <div className="absolute inset-0 bg-slate-700 border border-slate-800" />}
         {showStructures && type === 'door' && <div className="absolute inset-0 bg-amber-600/80 border border-amber-700" />}
         {showStructures && type === 'window' && <div className="absolute inset-0 bg-blue-300/50 border border-blue-400/80 backdrop-blur-[1px]" />}
-        
-        {/* ВОДА */}
+        {/* Оставляем рендер water для совместимости, но инструмент убран */}
         {type === 'water' && <div className="absolute inset-0 bg-blue-500/60 border border-blue-400" />}
-
-        {/* ОГОНЬ */}
         {type === 'fire' && <div className="absolute inset-0 bg-red-600/80 shadow-[0_0_15px_rgba(220,38,38,0.6)] animate-pulse" />}
     </div>
   );
@@ -97,16 +128,19 @@ export default function InstructorView({
   const [threshold, setThreshold] = useState(120);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
 
-  const [history, setHistory] = useState<CellType[][][]>([]);
+  const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyStep, setHistoryStep] = useState(-1);
 
-  const [selectedTool, setSelectedTool] = useState<CellType | 'ruler' | null>('wall');
+  const [selectedTool, setSelectedTool] = useState<CellType | 'ruler' | 'hydrant' | null>('wall');
   const [isDrawing, setIsDrawing] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const localSim = useLocalFireSim();
   const [showGridLines, setShowGridLines] = useState(true);
   const [showMapImage, setShowMapImage] = useState(true);
   const [showStructures, setShowStructures] = useState(true);
+  const [eraserSize, setEraserSize] = useState(1);
+
+  const [hydrants, setHydrants] = useState<HydrantPoint[]>([]);
 
   const [currentZoneTool, setCurrentZoneTool] = useState<ZoneType | 'select'>('select');
   const [drawingPoints, setDrawingPoints] = useState<Point[]>([]);
@@ -119,11 +153,28 @@ export default function InstructorView({
   const svgRef = useRef<SVGSVGElement>(null);
   const selectedToolRef = useRef(selectedTool);
   const isDrawingRef = useRef(isDrawing);
+  const eraserSizeRef = useRef(eraserSize);
 
   useEffect(() => { selectedToolRef.current = selectedTool; }, [selectedTool]);
   useEffect(() => { isDrawingRef.current = isDrawing; }, [isDrawing]);
+  useEffect(() => { eraserSizeRef.current = eraserSize; }, [eraserSize]);
 
-  const selectObjectTool = (tool: CellType) => {
+  const pushHistory = (newGrid: CellType[][], newZones: Zone[], newHydrants: HydrantPoint[]) => {
+      const newState: HistoryState = {
+          grid: newGrid.map(row => [...row]),
+          zones: [...newZones],
+          hydrants: [...newHydrants]
+      };
+      
+      const newHistory = history.slice(0, historyStep + 1);
+      newHistory.push(newState);
+      if (newHistory.length > 50) newHistory.shift();
+      
+      setHistory(newHistory);
+      setHistoryStep(newHistory.length - 1);
+  };
+
+  const selectObjectTool = (tool: CellType | 'hydrant') => {
     setSelectedTool(tool);
     setCurrentZoneTool('select'); 
     setCalibrationPoints([]); 
@@ -172,6 +223,17 @@ export default function InstructorView({
         return;
     }
 
+    if (selectedTool === 'hydrant') {
+        const w = rect.width;
+        const h = rect.height;
+        if (w > 0 && h > 0) {
+            const newH = [...hydrants, { id: Date.now().toString(), xPct: (x / w) * 100, yPct: (y / h) * 100 }];
+            setHydrants(newH);
+            pushHistory(grid, zones, newH);
+        }
+        return;
+    }
+
     if (currentZoneTool !== 'select') {
         setDrawingPoints([...drawingPoints, { x, y }]);
         return;
@@ -180,7 +242,9 @@ export default function InstructorView({
 
   const finishPolygon = () => {
     if (drawingPoints.length > 2) {
-      setZones([...zones, { id: Date.now().toString(), type: currentZoneTool as ZoneType, points: drawingPoints, floor: 1 }]);
+      const newZones = [...zones, { id: Date.now().toString(), type: currentZoneTool as ZoneType, points: drawingPoints, floor: 1 }];
+      setZones(newZones);
+      pushHistory(grid, newZones, hydrants);
     }
     setDrawingPoints([]);
     setCurrentZoneTool('select');
@@ -197,7 +261,7 @@ export default function InstructorView({
           setCurrentScale(scale);
           if (setMapScale) setMapScale(scale);
           setShowCalibrationModal(false);
-          setCalibrationPoints([]);
+          setCalibrationPoints([]); // Очищаем точки, линия пропадает
           selectObjectTool('wall');
       } else {
           alert("Некорректное значение дистанции");
@@ -219,11 +283,12 @@ export default function InstructorView({
         if (!ctx) return;
         ctx.drawImage(img, 0, 0, renderWidth, renderHeight);
         const imageData = ctx.getImageData(0, 0, renderWidth, renderHeight).data;
+        
         setGrid(prevGrid => {
-            const newGrid = prevGrid.map(row => [...row]);
-            for (let gy = 0; gy < gridRows; gy++) {
+            const tempGrid = prevGrid.map(row => [...row]);
+             for (let gy = 0; gy < gridRows; gy++) {
                 for (let gx = 0; gx < resolution; gx++) {
-                    if (['fire', 'water', 'door', 'window'].includes(newGrid[gy][gx])) continue;
+                    if (['fire', 'water', 'door', 'window'].includes(tempGrid[gy][gx])) continue;
                     let totalDarknessScore = 0;
                     let samples = 0;
                     const startX = gx * sampleRate;
@@ -238,11 +303,11 @@ export default function InstructorView({
                     }
                     const avgScore = totalDarknessScore / samples;
                     const triggerLevel = Math.pow((255 - sensitivity) / 255, 3);
-                    if (avgScore > triggerLevel) newGrid[gy][gx] = 'wall';
-                    else if (newGrid[gy][gx] === 'wall') newGrid[gy][gx] = 'empty';
+                    if (avgScore > triggerLevel) tempGrid[gy][gx] = 'wall';
+                    else if (tempGrid[gy][gx] === 'wall') tempGrid[gy][gx] = 'empty';
                 }
             }
-            return newGrid;
+            return tempGrid;
         });
     };
   }, [mapImage, resolution, gridRows]);
@@ -269,28 +334,27 @@ export default function InstructorView({
     }
   };
 
-  const saveToHistory = (newGrid: CellType[][]) => {
-    const newHistory = history.slice(0, historyStep + 1);
-    newHistory.push(newGrid.map(row => [...row]));
-    if (newHistory.length > 50) newHistory.shift();
-    setHistory(newHistory);
-    setHistoryStep(newHistory.length - 1);
-    setGrid(newGrid);
-  };
-
   const undo = () => {
     if (historyStep > 0) {
       const prevStep = historyStep - 1;
+      const state = history[prevStep];
       setHistoryStep(prevStep);
-      setGrid(history[prevStep].map(row => [...row]));
+      
+      setGrid(state.grid.map(row => [...row]));
+      setZones([...state.zones]);
+      setHydrants([...state.hydrants]);
     }
   };
 
   const redo = () => {
     if (historyStep < history.length - 1) {
       const nextStep = historyStep + 1;
+      const state = history[nextStep];
       setHistoryStep(nextStep);
-      setGrid(history[nextStep].map(row => [...row]));
+
+      setGrid(state.grid.map(row => [...row]));
+      setZones([...state.zones]);
+      setHydrants([...state.hydrants]);
     }
   };
 
@@ -298,35 +362,51 @@ export default function InstructorView({
       if(confirm('Очистить всё поле и сбросить масштаб? Это действие нельзя отменить.')) {
           const emptyGrid = Array(gridRows).fill(null).map(() => Array(resolution).fill('empty'));
           setGrid(emptyGrid);
-          saveToHistory(emptyGrid);
+          setZones([]); 
+          setHydrants([]);
           setCurrentScale(null);
           setCalibrationPoints([]);
           if(setMapScale) setMapScale(1);
-          setZones([]); 
+          
+          pushHistory(emptyGrid, [], []);
       }
   };
 
+  const paintCell = (newGrid: CellType[][], cy: number, cx: number, target: CellType) => {
+    const size = target === 'empty' ? eraserSizeRef.current : 1;
+    const half = Math.floor(size / 2);
+    for (let dy = -half; dy < size - half; dy++) {
+      for (let dx = -half; dx < size - half; dx++) {
+        const ny = cy + dy;
+        const nx = cx + dx;
+        if (ny >= 0 && ny < newGrid.length && nx >= 0 && nx < (newGrid[0]?.length ?? 0)) {
+          newGrid[ny][nx] = target;
+        }
+      }
+    }
+  };
+
   const handleMouseDown = useCallback((y: number, x: number) => {
-    if (isPlaying || selectedTool === 'ruler' || selectedTool === null) return; 
+    if (isPlaying || selectedTool === 'ruler' || selectedTool === 'hydrant' || selectedTool === null) return;
     setIsDrawing(true);
     isDrawingRef.current = true;
-    
+
     setGrid(prev => {
         const newGrid = prev.map(row => [...row]);
-        const targetTool = selectedToolRef.current; 
+        const targetTool = selectedToolRef.current;
         const target = targetTool === 'empty' ? 'empty' : targetTool as CellType;
-        if (newGrid[y][x] !== target) newGrid[y][x] = target;
+        paintCell(newGrid, y, x, target);
         return newGrid;
     });
   }, [isPlaying, selectedTool]);
 
   const handleMouseEnter = useCallback((y: number, x: number) => {
-    if (isDrawingRef.current && !isPlaying && selectedToolRef.current !== 'ruler' && selectedToolRef.current !== null) {
+    if (isDrawingRef.current && !isPlaying && selectedToolRef.current !== 'ruler' && selectedToolRef.current !== 'hydrant' && selectedToolRef.current !== null) {
         setGrid(prev => {
             const newGrid = prev.map(row => [...row]);
             const targetTool = selectedToolRef.current;
             const target = targetTool === 'empty' ? 'empty' : targetTool as CellType;
-            if (newGrid[y][x] !== target) newGrid[y][x] = target;
+            paintCell(newGrid, y, x, target);
             return newGrid;
         });
     }
@@ -336,7 +416,7 @@ export default function InstructorView({
     if (isDrawingRef.current) {
         setIsDrawing(false);
         isDrawingRef.current = false;
-        saveToHistory(grid);
+        pushHistory(grid, zones, hydrants);
     }
   };
 
@@ -354,19 +434,25 @@ export default function InstructorView({
             <div className="flex-1 flex flex-col overflow-y-auto">
                 <div className="p-4">
                     <div className="text-[10px] font-bold text-slate-400 uppercase mb-2">Объекты</div>
-                    <div className="grid grid-cols-3 gap-2">
+                    {/* Объединенное меню инструментов (БЕЗ ВОДЫ) */}
+                    <div className="grid grid-cols-4 gap-2">
                         <ToolButton active={selectedTool === 'wall'} onClick={() => selectObjectTool('wall')} icon={<BrickWall />} label="СТЕНА" />
                         <ToolButton active={selectedTool === 'door'} onClick={() => selectObjectTool('door')} icon={<DoorOpen />} label="ДВЕРЬ" color="text-amber-600" />
                         <ToolButton active={selectedTool === 'window'} onClick={() => selectObjectTool('window')} icon={<AppWindow />} label="ОКНО" color="text-blue-500" />
-                        <ToolButton active={selectedTool === 'water'} onClick={() => selectObjectTool('water')} icon={<Droplets />} label="ВОДА" color="text-blue-600" />
+                        <ToolButton active={selectedTool === 'fire'} onClick={() => selectObjectTool('fire')} icon={<Crosshair />} label="ОЧАГ" color="text-red-600" />
+                        <ToolButton active={selectedTool === 'hydrant'} onClick={() => selectObjectTool('hydrant')} icon={<Droplets />} label="ГИДРАНТ" color="text-cyan-600" />
                         <ToolButton active={selectedTool === 'empty'} onClick={() => selectObjectTool('empty')} icon={<Eraser />} label="ЛАСТИК" />
                     </div>
-                    
-                    <div className="text-[10px] font-bold text-slate-400 uppercase mt-4 mb-2">Зоны & Масштаб</div>
-                    <div className="grid grid-cols-2 gap-2">
-                        <div className="col-span-2">
-                            <ToolButton active={selectedTool === 'fire'} onClick={() => selectObjectTool('fire')} icon={<Crosshair />} label="ОЧАГ ПОЖАРА" color="text-red-600" />
+
+                    {selectedTool === 'empty' && (
+                        <div className="mt-2 px-1">
+                            <span className="text-[8px] text-slate-400 font-bold flex justify-between"><span>РАЗМЕР ЛАСТИКА</span><span>{eraserSize}×{eraserSize}</span></span>
+                            <input type="range" min="1" max="5" step="1" value={eraserSize} onChange={(e) => setEraserSize(Number(e.target.value))} className="w-full h-1.5 bg-slate-300 rounded-lg appearance-none cursor-pointer accent-blue-600 mt-1" />
                         </div>
+                    )}
+
+                    <div className="text-[10px] font-bold text-slate-400 uppercase mt-4 mb-2">Масштаб</div>
+                    <div className="grid grid-cols-2 gap-2">
                         <div className="col-span-2">
                             {currentScale ? (
                                 <div className="bg-blue-50 border border-blue-200 p-2 rounded-lg flex items-center justify-between group">
@@ -383,6 +469,11 @@ export default function InstructorView({
                                 </button>
                             )}
                         </div>
+                        {hydrants.length > 0 && (
+                            <div className="col-span-2 text-[10px] text-slate-500 flex items-center justify-between px-1">
+                                <span>Гидрантов: <span className="font-bold text-cyan-600">{hydrants.length}</span></span>
+                            </div>
+                        )}
                     </div>
 
                     {drawingPoints.length > 0 && (
@@ -404,6 +495,27 @@ export default function InstructorView({
                     <div className="text-[10px] font-bold text-slate-400 uppercase mb-3 flex items-center gap-2"><Navigation className="w-3 h-3" /> Целевой адрес</div>
                     <input type="text" value={targetAddress} onChange={(e) => setTargetAddress(e.target.value)} placeholder="Напр: ул. Ленина, 42" className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-sm text-slate-900 focus:border-blue-500 outline-none placeholder-slate-400 shadow-sm" />
                     <p className="text-[9px] text-slate-500 mt-2 leading-relaxed">Этот адрес должен выяснить диспетчер в разговоре.</p>
+                </div>
+                <div className="h-px bg-slate-200"></div>
+                <div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase mb-3 flex items-center gap-2"><Mic className="w-3 h-3" /> Сложность звонящего</div>
+                    <div className="space-y-2">
+                        {DIFFICULTY_OPTIONS.map(opt => (
+                            <button
+                                key={opt.value}
+                                onClick={() => setScenario({ ...scenario, callerDifficulty: opt.value })}
+                                className={`w-full text-left p-3 rounded-lg border transition-all ${
+                                    scenario.callerDifficulty === opt.value
+                                        ? 'bg-blue-50 border-blue-300 ring-1 ring-blue-200'
+                                        : 'bg-white border-slate-200 hover:border-slate-300'
+                                }`}
+                            >
+                                <div className="text-xs font-bold text-slate-800">{opt.label}</div>
+                                <div className="text-[10px] text-slate-500 mt-0.5">{opt.desc}</div>
+                            </button>
+                        ))}
+                    </div>
+                    <p className="text-[9px] text-slate-500 mt-2 leading-relaxed">Определяет поведение AI-абонента (от спокойного до паники).</p>
                 </div>
                 <div className="h-px bg-slate-200"></div>
                 <div>
@@ -446,7 +558,10 @@ export default function InstructorView({
 
             {mapImage && (
               <div className={`flex items-center gap-3 bg-slate-50 p-1.5 rounded-lg border border-slate-200 transition-all ${isPlaying ? 'opacity-40 pointer-events-none grayscale' : ''}`}>
-                  <button onClick={() => { const newState = !isAutoDetecting; setIsAutoDetecting(newState); if(newState) detectWalls(threshold); else saveToHistory(grid); }} className={`flex items-center gap-2 px-3 py-1.5 rounded transition-all ${isAutoDetecting ? 'bg-purple-600 text-white shadow-md' : 'hover:bg-slate-200 text-purple-600'}`}>
+                  <button onClick={() => { const newState = !isAutoDetecting; setIsAutoDetecting(newState); if(newState) detectWalls(threshold); else {
+                      // При завершении автодетекта сохраняем в историю
+                      pushHistory(grid, zones, hydrants);
+                  } }} className={`flex items-center gap-2 px-3 py-1.5 rounded transition-all ${isAutoDetecting ? 'bg-purple-600 text-white shadow-md' : 'hover:bg-slate-200 text-purple-600'}`}>
                       <Wand2 className="w-4 h-4" /><span className="text-[10px] font-bold">{isAutoDetecting ? 'ГОТОВО' : 'АВТО'}</span>
                   </button>
                   {isAutoDetecting && (<div className="flex items-center gap-2 px-2"><input type="range" min="10" max="250" step="5" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} className="w-24 h-1.5 bg-slate-300 rounded-lg appearance-none cursor-pointer accent-purple-500"/></div>)}
@@ -488,6 +603,9 @@ export default function InstructorView({
                 }
               }
               localSim.start({ width: resolution, height: gridRows, walls, sources });
+              // Стабы бэкенда
+              sendScenarioSettings(scenario);
+              startCallerAI(scenario.callerDifficulty, targetAddress);
             } else {
               localSim.stop();
             }
@@ -524,6 +642,17 @@ export default function InstructorView({
 
               <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none z-20">
                   {zones.map(zone => <ZoneRenderer key={zone.id} zone={zone} />)}
+                  {/* Гидранты */}
+                  {hydrants.map(h => {
+                    const r = currentScale ? Math.max(4, 6 / (currentScale * 10)) : 6;
+                    return (
+                      <g key={h.id}>
+                        <circle cx={`${h.xPct}%`} cy={`${h.yPct}%`} r={r + 2} fill="white" opacity="0.8" />
+                        <circle cx={`${h.xPct}%`} cy={`${h.yPct}%`} r={r} fill="#06b6d4" stroke="#0e7490" strokeWidth="1.5" />
+                        <text x={`${h.xPct}%`} y={`${h.yPct}%`} textAnchor="middle" dominantBaseline="central" fill="white" fontSize={r * 1.2} fontWeight="bold">H</text>
+                      </g>
+                    );
+                  })}
                   {drawingPoints.length > 0 && currentZoneTool !== 'select' && <polyline points={drawingPoints.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#2563eb" strokeWidth="2" strokeDasharray="5 5" />}
                   {calibrationPoints.length > 0 && (
                       <g>
@@ -570,12 +699,8 @@ export default function InstructorView({
             </div>
         </div>
         <div className="flex-1">
-           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><Zap className="w-3 h-3 text-amber-500" /> Вводные события</h3>
-           <div className="space-y-2">
-                <EventButton label="⚠️ Отказ гидранта №1" active={isPlaying} />
-                <EventButton label="⚠️ Обрушение кровли" active={isPlaying} />
-                <EventButton label="💨 Резкая смена ветра" active={isPlaying} />
-           </div>
+           {/* "Вводные события" убраны по запросу */}
+           
            {!isPlaying && (
              <button onClick={() => {
                const newGrid: CellType[][] = Array.from({ length: gridRows }, () => new Array(resolution).fill('empty'));
@@ -590,7 +715,10 @@ export default function InstructorView({
                const fireX = Math.floor(resolution * 0.35);
                const fireY = Math.floor(gridRows * 0.4);
                newGrid[fireY][fireX] = 'fire';
+               
                setGrid(newGrid);
+               // Демо-сценарий не чистит гидранты, но сохраняем в историю
+               pushHistory(newGrid, zones, hydrants);
              }} className="mt-3 w-full px-3 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-bold hover:bg-amber-100 transition-colors">
                Демо-сценарий
              </button>
@@ -616,10 +744,6 @@ function ToolButton({ active, onClick, icon, color, label }: any) {
       {active && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-blue-500 rounded-r" />}
     </button>
   );
-}
-
-function EventButton({ label, active }: { label: string, active: boolean }) {
-    return <button disabled={!active} className={`w-full text-left px-3 py-2.5 rounded text-xs transition-all border ${active ? 'bg-white border-slate-200 text-slate-800 hover:bg-blue-50 hover:border-blue-200 cursor-pointer active:scale-95 shadow-sm' : 'bg-slate-50 border-transparent text-slate-400 cursor-not-allowed opacity-50'}`}>{label}</button>
 }
 
 function ZoneRenderer({ zone }: { zone: Zone }) {
