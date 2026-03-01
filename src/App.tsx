@@ -239,7 +239,6 @@ export default function App() {
     <div className="flex flex-col h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       {authButton}
       <main className="flex-1 overflow-hidden relative">
-<<<<<<< HEAD
         {activeRole === 'instructor' && (
           <InstructorView
             scenario={scenario}
@@ -265,24 +264,9 @@ export default function App() {
         {activeRole === 'rtp' && <RTPView sharedLayout={sharedMapLayout} />}
         {activeRole === 'squad' && <SquadView simState={fireSim.simState} fireSim={fireSim} />}
         {activeRole === 'chief' && <ChiefView simState={fireSim.simState} fireSim={fireSim} onShareLayout={setSharedMapLayout} />}
-=======
-        <InstructorView
-          scenario={scenario}
-          setScenario={setScenario}
-          zones={zones}
-          setZones={setZones}
-          stationResources={stationResources}
-          setStationResources={setStationResources}
-          targetAddress={targetAddress}
-          setTargetAddress={setTargetAddress}
-          fireSim={fireSim}
-          onBack={() => setScreen('lobby')}
-        />
->>>>>>> 68561d295f5edb2a2e95b3d3f40ff605d2189648
       </main>
     </div>
   );
-<<<<<<< HEAD
 }
 
 function Tab({ label, active, onClick }: { role: string; label: string; active: boolean; onClick: () => void }) {
@@ -299,6 +283,3 @@ function Tab({ label, active, onClick }: { role: string; label: string; active: 
     </button>
   );
 }
-=======
-}
->>>>>>> 68561d295f5edb2a2e95b3d3f40ff605d2189648
