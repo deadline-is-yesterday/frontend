@@ -11,7 +11,8 @@ import type { EditorMode, EquipmentSpec, FireMap, HoseSpec } from '../types/fire
 import { iconUrl } from './firemap/iconUrl';
 
 interface FireMapViewProps {
-  mapId: string;
+  /** API-префикс (напр. "/game_logic" или "/chief"). */
+  apiPrefix: string;
 }
 
 const ZOOM_MIN = 0.3;
@@ -22,8 +23,8 @@ function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
 
-export default function FireMapView({ mapId }: FireMapViewProps) {
-  const { map, equipment, savedLayout, loading } = useFireMapData(mapId);
+export default function FireMapView({ apiPrefix }: FireMapViewProps) {
+  const { map, equipment, savedLayout, loading } = useFireMapData(apiPrefix);
   const {
     layout,
     mode,
@@ -49,7 +50,7 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
     deleteBranching,
     syncHose,
     syncEquipment,
-  } = useFireMapState();
+  } = useFireMapState({ hoseEndpoint: `${apiPrefix}/hose`, equipmentEndpoint: `${apiPrefix}/car` });
 
   // Zoom & pan
   const [zoom, setZoom] = useState(1);
@@ -64,19 +65,25 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
 
   // Загрузить сохранённую расстановку + авто-размещение техники из бэка
   useEffect(() => {
-    if (savedLayout) loadLayout(savedLayout);
-
-    // Машины, у которых есть placed_id, x, y — авто-размещаем
+    if (equipment.length > 0) console.log('[FireMapView] equipment[0]=', JSON.stringify(equipment[0]));
+    // Машины с placed_id/x/y — уже размещены на карте
     const prePlaced = equipment
       .filter(eq => eq.placed_id != null && eq.x != null && eq.y != null)
       .map(eq => ({ instance_id: eq.id, x: eq.x!, y: eq.y! }));
-    if (prePlaced.length > 0) {
-      loadLayout({
-        placed_equipment: prePlaced,
-        placed_branchings: savedLayout?.placed_branchings ?? [],
-        hoses: savedLayout?.hoses ?? [],
-      });
-    }
+
+    // Объединяем с savedLayout, если он есть
+    const savedEquipment = savedLayout?.placed_equipment ?? [];
+    const savedIds = new Set(savedEquipment.map(e => e.instance_id));
+    const merged = [
+      ...savedEquipment,
+      ...prePlaced.filter(p => !savedIds.has(p.instance_id)),
+    ];
+
+    loadLayout({
+      placed_equipment: merged,
+      placed_branchings: savedLayout?.placed_branchings ?? [],
+      hoses: savedLayout?.hoses ?? [],
+    });
   }, [savedLayout, equipment, loadLayout]);
 
   const svgContainerRef = useRef<HTMLDivElement>(null);
@@ -333,10 +340,9 @@ export default function FireMapView({ mapId }: FireMapViewProps) {
   }, [selectedId, deleteObject]);
 
   const handleSave = async () => {
-    if (!map) return;
     setIsSaving(true);
     try {
-      await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:5000'}/firemap/maps/${map.id}/layout`, {
+      await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:5000'}${apiPrefix}/maps/layout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(layout),

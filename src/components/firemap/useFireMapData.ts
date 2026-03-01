@@ -23,7 +23,7 @@ const MOCK_EQUIPMENT: EquipmentSpec[] = [
       { id: 'h2', max_length_m: 100 },
     ],
     branchings: [{ id: 'b1', type: 'three_way' }],
-    placement_id: null, x: null, y: null,
+    placed_id: null, x: null, y: null,
   },
   {
     id: 'al30',
@@ -31,7 +31,7 @@ const MOCK_EQUIPMENT: EquipmentSpec[] = [
     icon_path: 'Лист 02/04.Пожарная автолестница.png',
     hoses: [{ id: 'h1', max_length_m: 60 }],
     branchings: [],
-    placement_id: null, x: null, y: null,
+    placed_id: null, x: null, y: null,
   },
   {
     id: 'asa',
@@ -39,7 +39,7 @@ const MOCK_EQUIPMENT: EquipmentSpec[] = [
     icon_path: 'Лист 01/02.Пожарный аварийно–спасательный автомобиль.png',
     hoses: [],
     branchings: [],
-    placement_id: null, x: null, y: null,
+    placed_id: null, x: null, y: null,
   },
   {
     id: 'apm',
@@ -47,13 +47,13 @@ const MOCK_EQUIPMENT: EquipmentSpec[] = [
     icon_path: 'Лист 03/01.Мотопомпа пожарная: переносная.png',
     hoses: [{ id: 'h1', max_length_m: 40 }],
     branchings: [{ id: 'b1', type: 'two_way' }],
-    placement_id: null, x: null, y: null,
+    placed_id: null, x: null, y: null,
   },
 ];
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 
-export function useFireMapData(mapId: string): {
+export function useFireMapData(apiPrefix: string): {
   map: FireMap | null;
   equipment: EquipmentSpec[];
   savedLayout: MapLayout | null;
@@ -74,9 +74,9 @@ export function useFireMapData(mapId: string): {
       setError(null);
       try {
         const [mapRes, eqRes, layoutRes] = await Promise.all([
-          fetch(`${API_BASE}/firemap/maps/${mapId}`, { signal: controller.signal }),
-          fetch(`${API_BASE}/firemap/equipment`, { signal: controller.signal }),
-          fetch(`${API_BASE}/firemap/maps/${mapId}/layout`, { signal: controller.signal }),
+          fetch(`${API_BASE}${apiPrefix}/maps`, { signal: controller.signal }),
+          fetch(`${API_BASE}${apiPrefix}/equipment`, { signal: controller.signal }),
+          fetch(`${API_BASE}${apiPrefix}/maps/layout`, { signal: controller.signal }),
         ]);
         if (!mapRes.ok || !eqRes.ok) throw new Error('Ошибка ответа сервера');
         const [mapData, eqData] = await Promise.all([mapRes.json(), eqRes.json()]);
@@ -105,7 +105,7 @@ export function useFireMapData(mapId: string): {
 
     load();
     return () => controller.abort();
-  }, [mapId]);
+  }, [apiPrefix]);
 
   return { map, equipment, savedLayout, loading, error };
 }
