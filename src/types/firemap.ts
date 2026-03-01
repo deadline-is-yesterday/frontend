@@ -18,7 +18,7 @@ export type EquipmentSpec = {
   hoses: HoseSpec[];
   branchings: BranchingSpec[];
   /** Если != null — машина уже размещена на карте. */
-  placement_id: string | null;
+  placed_id: string | null;
   x: number | null;
   y: number | null;
 };

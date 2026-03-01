@@ -7,23 +7,17 @@ const EMPTY_LAYOUT: MapLayout = {
   hoses: [],
 };
 
-/** Путь API для синхронизации конца рукава (задать позже). */
-export const HOSE_ENDPOINT_API = '/game_logic/hose';
-
-/** Путь API для синхронизации техники (задать позже). */
-export const EQUIPMENT_ENDPOINT_API = '/game_logic/car';
-
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 
 /** Fire-and-forget запрос к бэку для конца рукава. */
 function syncHoseEndpoint(
+  apiPath: string,
   method: 'POST' | 'PUT' | 'DELETE',
   id: string,
   endpoint?: { x: number; y: number },
 ) {
-  if (!HOSE_ENDPOINT_API) return;
-  const url = `${API_BASE}${HOSE_ENDPOINT_API}`;
-  fetch(url, {
+  if (!apiPath) return;
+  fetch(`${API_BASE}${apiPath}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -38,13 +32,13 @@ function syncHoseEndpoint(
 
 /** Fire-and-forget запрос к бэку для техники. */
 function syncEquipmentEndpoint(
+  apiPath: string,
   method: 'POST' | 'PUT' | 'DELETE',
   id: string,
   pos?: { x: number; y: number },
 ) {
-  if (!EQUIPMENT_ENDPOINT_API) return;
-  const url = `${API_BASE}${EQUIPMENT_ENDPOINT_API}`;
-  fetch(url, {
+  if (!apiPath) return;
+  fetch(`${API_BASE}${apiPath}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, x: pos?.x ?? 0, y: pos?.y ?? 0 }),
@@ -74,7 +68,19 @@ function distToSegment(p: Point, a: Point, b: Point): number {
   return dist(p, { x: a.x + t * dx, y: a.y + t * dy });
 }
 
-export function useFireMapState() {
+export interface FireMapStateOptions {
+  /** Путь API для синхронизации рукавов (пустая строка = без синхронизации). */
+  hoseEndpoint?: string;
+  /** Путь API для синхронизации техники (пустая строка = без синхронизации). */
+  equipmentEndpoint?: string;
+}
+
+export function useFireMapState(opts: FireMapStateOptions = {}) {
+  const hoseApi = useRef(opts.hoseEndpoint ?? '');
+  const eqApi = useRef(opts.equipmentEndpoint ?? '');
+  hoseApi.current = opts.hoseEndpoint ?? '';
+  eqApi.current = opts.equipmentEndpoint ?? '';
+
   const [layout, setLayout] = useState<MapLayout>(EMPTY_LAYOUT);
   const [mode, setMode] = useState<EditorMode>('select');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -97,7 +103,7 @@ export function useFireMapState() {
       ...prev,
       placed_equipment: [...prev.placed_equipment, { instance_id: id, x, y }],
     }));
-    syncEquipmentEndpoint('POST', id, { x, y });
+    syncEquipmentEndpoint(eqApi.current, 'POST', id, { x, y });
     return id;
   }, []);
 
@@ -117,13 +123,13 @@ export function useFireMapState() {
       const isHose = prev.hoses.some(h => h.id === instance_id);
 
       if (isEquipment) {
-        syncEquipmentEndpoint('DELETE', instance_id);
+        syncEquipmentEndpoint(eqApi.current, 'DELETE', instance_id);
         // Удаляем рукава, привязанные к этой технике
         prev.hoses
           .filter(h => h.equipment_instance_id === instance_id)
-          .forEach(h => syncHoseEndpoint('DELETE', h.id));
+          .forEach(h => syncHoseEndpoint(hoseApi.current, 'DELETE', h.id));
       }
-      if (isHose) syncHoseEndpoint('DELETE', instance_id);
+      if (isHose) syncHoseEndpoint(hoseApi.current, 'DELETE', instance_id);
 
       return {
         ...prev,
@@ -192,7 +198,7 @@ export function useFireMapState() {
           },
         ],
       }));
-      syncHoseEndpoint('POST', id, { x: endpoint.x, y: endpoint.y });
+      syncHoseEndpoint(hoseApi.current, 'POST', id, { x: endpoint.x, y: endpoint.y });
       setDrawingHose(null);
       setMode('select');
     },
@@ -293,7 +299,7 @@ export function useFireMapState() {
 
   /** Удалить конкретный рукав по id. */
   const deleteHose = useCallback((hose_id: string) => {
-    syncHoseEndpoint('DELETE', hose_id);
+    syncHoseEndpoint(hoseApi.current, 'DELETE', hose_id);
     setLayout(prev => ({
       ...prev,
       hoses: prev.hoses.filter(h => h.id !== hose_id),
@@ -326,7 +332,7 @@ export function useFireMapState() {
         };
         // Синхронизируем с бэком
         const hose = updated.hoses.find(h => h.id === hose_id);
-        if (hose) syncHoseEndpoint('PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+        if (hose) syncHoseEndpoint(hoseApi.current, 'PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
         return updated;
       });
     },
@@ -346,7 +352,7 @@ export function useFireMapState() {
           }),
         };
         const hose = updated.hoses.find(h => h.id === hose_id);
-        if (hose) syncHoseEndpoint('PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+        if (hose) syncHoseEndpoint(hoseApi.current, 'PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
         return updated;
       });
     },
@@ -357,7 +363,7 @@ export function useFireMapState() {
   const syncHose = useCallback((hose_id: string) => {
     setLayout(prev => {
       const hose = prev.hoses.find(h => h.id === hose_id);
-      if (hose) syncHoseEndpoint('PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+      if (hose) syncHoseEndpoint(hoseApi.current, 'PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
       return prev; // не меняем state
     });
   }, []);
@@ -366,7 +372,7 @@ export function useFireMapState() {
   const syncEquipment = useCallback((instance_id: string) => {
     setLayout(prev => {
       const eq = prev.placed_equipment.find(e => e.instance_id === instance_id);
-      if (eq) syncEquipmentEndpoint('PUT', instance_id, { x: eq.x, y: eq.y });
+      if (eq) syncEquipmentEndpoint(eqApi.current, 'PUT', instance_id, { x: eq.x, y: eq.y });
       return prev;
     });
   }, []);
