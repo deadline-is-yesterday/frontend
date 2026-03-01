@@ -14,7 +14,9 @@ export interface SimTruck {
   x: number;
   y: number;
   water: number;
+  max_water: number;
   hose_open: boolean;
+  hydrant_connected: boolean;
   hose_end: { x: number; y: number } | null;
 }
 

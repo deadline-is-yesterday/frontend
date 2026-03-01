@@ -207,8 +207,8 @@ export default function App() {
               />
             )}
             {studentRole === 'rtp' && <RTPView sharedLayout={sharedMapLayout} />}
-            {studentRole === 'squad' && <SquadView />}
-            {studentRole === 'chief' && <ChiefView simState={fireSim.simState} onShareLayout={setSharedMapLayout} />}
+            {studentRole === 'squad' && <SquadView simState={fireSim.simState} fireSim={fireSim} />}
+            {studentRole === 'chief' && <ChiefView simState={fireSim.simState} fireSim={fireSim} onShareLayout={setSharedMapLayout} />}
           </main>
           <CommunicationPanel role={studentRole} socketRef={socketRef} connected={connected} />
         </div>
@@ -260,6 +260,7 @@ export default function App() {
           setStationResources={setStationResources}
           targetAddress={targetAddress}
           setTargetAddress={setTargetAddress}
+          simState={fireSim.simState}
           fireSim={fireSim}
           onBack={() => setScreen('lobby')}
         />

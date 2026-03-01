@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MousePointer2, Trash2, Save, ZoomIn, ZoomOut, Send } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MousePointer2, Trash2, Save, ZoomIn, ZoomOut, Send, CircleHelp } from 'lucide-react';
 import { useFireMapData } from './firemap/useFireMapData';
 import { useFireMapState } from './firemap/useFireMapState';
 import EquipmentPanel from './firemap/EquipmentPanel';
@@ -9,9 +9,11 @@ import HoseLayer from './firemap/HoseLayer';
 import BranchingLayer, { getBranchingConnectors } from './firemap/BranchingLayer';
 import type { EditorMode, EquipmentSpec, FireMap, HoseSpec, MapLayout } from '../types/firemap';
 import type { FireSimState } from '../types/firesim';
+import type { UseFireSimReturn } from '../hooks/useFireSim';
 import { iconUrl } from './firemap/iconUrl';
 import FireGridLayer from './firemap/FireGridLayer';
 import CompassControl from './CompassControl';
+import TutorialOverlay, { type TutorialStep } from './firemap/TutorialOverlay';
 
 interface FireMapViewProps {
   /** Префикс для загрузки данных (maps/equipment/layout), по умолчанию '/firemap' */
@@ -23,6 +25,8 @@ interface FireMapViewProps {
   /** Эндпоинт синхронизации концов рукавов, напр. '/hq_game_logic/hose_end' */
   hoseEndEndpoint?: string;
   simState?: FireSimState | null;
+  /** Хук симуляции для отправки событий (гидрант, полив) */
+  fireSim?: UseFireSimReturn;
   /** Режим только для чтения — скрывает тулбар и панель техники */
   readOnly?: boolean;
   /** Callback для отправки текущей карты РТП */
@@ -34,12 +38,13 @@ interface FireMapViewProps {
 const ZOOM_MIN = 0.3;
 const ZOOM_MAX = 5;
 const ZOOM_STEP = 1.15;
+const FIREMAP_TUTORIAL_STORAGE_KEY = 'firemap_tutorial_done_v1';
 
 function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
 
-export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoint, hoseEndEndpoint, simState, readOnly, onShareLayout, initialLayout }: FireMapViewProps) {
+export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoint, hoseEndEndpoint, simState, fireSim, readOnly, onShareLayout, initialLayout }: FireMapViewProps) {
   const { map, equipment, savedLayout, loading } = useFireMapData(dataPrefix);
   const {
     layout,
@@ -117,6 +122,85 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
   const panStartRef = useRef<{ clientX: number; clientY: number; panX: number; panY: number } | null>(null);
   const isPanningRef = useRef(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
+
+  const tutorialSteps = useMemo<TutorialStep[]>(() => {
+    const baseSteps: TutorialStep[] = [
+      {
+        id: 'select',
+        targetId: 'tool-select',
+        title: 'Режимы работы',
+        body: 'Начинайте с режима "Выбор": в нем можно выделять объекты, двигать технику и открывать свойства.',
+      },
+      {
+        id: 'equipment',
+        targetId: 'equipment-panel',
+        title: 'Панель техники',
+        body: 'Выберите машину слева, затем кликните по карте, чтобы разместить ее на плане.',
+      },
+      {
+        id: 'canvas',
+        targetId: 'map-canvas',
+        title: 'Работа с картой',
+        body: 'Колесо мыши изменяет масштаб. Зажмите пробел или среднюю кнопку мыши для панорамирования.',
+      },
+      {
+        id: 'save',
+        targetId: 'tool-save',
+        title: 'Сохранение',
+        body: 'Регулярно сохраняйте расстановку. Это зафиксирует текущее состояние техники, рукавов и их концов.',
+      },
+      {
+        id: 'properties',
+        targetId: 'properties-panel',
+        title: 'Свойства',
+        body: 'При выборе объекта справа открываются свойства: там настраиваются параметры и управляющие действия.',
+      },
+    ];
+    if (onShareLayout && !readOnly) {
+      baseSteps.splice(4, 0, {
+        id: 'share',
+        targetId: 'tool-share',
+        title: 'Передача карты РТП',
+        body: 'После подготовки расстановки нажмите "Отправить карту РТП", чтобы передать актуальную схему в штаб.',
+      });
+    }
+    return baseSteps;
+  }, [onShareLayout, readOnly]);
+
+  useEffect(() => {
+    if (readOnly) return;
+    const done = localStorage.getItem(FIREMAP_TUTORIAL_STORAGE_KEY) === '1';
+    if (!done) {
+      setTutorialStepIndex(0);
+      setTutorialOpen(true);
+    }
+  }, [readOnly]);
+
+  const startTutorial = useCallback(() => {
+    setTutorialStepIndex(0);
+    setTutorialOpen(true);
+  }, []);
+
+  const closeTutorial = useCallback((markDone: boolean) => {
+    setTutorialOpen(false);
+    if (markDone) localStorage.setItem(FIREMAP_TUTORIAL_STORAGE_KEY, '1');
+  }, []);
+
+  const nextTutorialStep = useCallback(() => {
+    setTutorialStepIndex(prev => {
+      if (prev >= tutorialSteps.length - 1) {
+        closeTutorial(true);
+        return prev;
+      }
+      return prev + 1;
+    });
+  }, [tutorialSteps.length, closeTutorial]);
+
+  const prevTutorialStep = useCallback(() => {
+    setTutorialStepIndex(prev => Math.max(0, prev - 1));
+  }, []);
 
   // Координаты клиента → координаты плана
   const toPlanCoords = useCallback(
@@ -438,6 +522,7 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
           onZoomIn={() => setZoom(z => clamp(z * ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))}
           onZoomOut={() => setZoom(z => clamp(z / ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))}
           onShareLayout={onShareLayout ? () => onShareLayout(layout) : undefined}
+          onStartTutorial={startTutorial}
         />
       )}
 
@@ -455,6 +540,7 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
         {/* SVG-канвас */}
         <div
           ref={svgContainerRef}
+          data-tour-id="map-canvas"
           className="flex-1 overflow-hidden bg-slate-200 relative"
           style={{ cursor }}
           onWheel={handleWheel}
@@ -522,6 +608,7 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
                 selectedId={selectedId}
                 zoom={zoom}
                 mode={mode}
+                simTrucks={simState?.trucks ?? null}
                 onSelect={id => {
                   if (mode === 'delete') {
                     deleteObject(id);
@@ -572,7 +659,26 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
             hoseEnd={selectedHoseEnd}
             hose={selectedHose}
             hydrantLabel={selectedHydrant?.label ?? null}
-            onToggleActive={() => toggleHoseEndActive(selectedHoseEnd.id)}
+            truckWater={(() => {
+              if (!simState || !selectedHose) return null;
+              const truck = simState.trucks.find(t => t.id === selectedHose.equipment_instance_id);
+              return truck ? { water: truck.water, max_water: truck.max_water } : null;
+            })()}
+            onToggleActive={() => {
+              toggleHoseEndActive(selectedHoseEnd.id);
+              // Отправить событие в симуляцию
+              if (fireSim && selectedHose) {
+                const truckId = selectedHose.equipment_instance_id;
+                const newActive = !selectedHoseEnd.active;
+                if (selectedHoseEnd.hydrant_id) {
+                  // Гидрант: подключение/отключение
+                  fireSim.setHydrantConnected(truckId, newActive);
+                } else {
+                  // Свободный конец: включить/выключить полив
+                  fireSim.setHoseState(truckId, selectedHoseEnd.x, selectedHoseEnd.y, newActive);
+                }
+              }
+            }}
             onSetAngle={(angle) => setHoseEndAngle(selectedHoseEnd.id, angle)}
             onSetSpread={(spread) => setHoseEndSpread(selectedHoseEnd.id, spread)}
             onAngleCommit={() => syncHoseEnd(selectedHoseEnd.id)}
@@ -587,6 +693,17 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
           />
         )}
       </div>
+      {tutorialOpen && tutorialSteps[tutorialStepIndex] && (
+        <TutorialOverlay
+          open={tutorialOpen}
+          step={tutorialSteps[tutorialStepIndex]}
+          stepIndex={tutorialStepIndex}
+          totalSteps={tutorialSteps.length}
+          onNext={nextTutorialStep}
+          onPrev={prevTutorialStep}
+          onSkip={() => closeTutorial(false)}
+        />
+      )}
     </div>
   );
 }
@@ -606,6 +723,7 @@ function Toolbar({
   onZoomIn,
   onZoomOut,
   onShareLayout,
+  onStartTutorial,
 }: {
   mode: EditorMode;
   zoom: number;
@@ -617,10 +735,16 @@ function Toolbar({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onShareLayout?: () => void;
+  onStartTutorial: () => void;
 }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 border-b border-slate-700 text-white flex-shrink-0">
-      <ToolButton active={mode === 'select'} onClick={() => onMode('select')} title="Выбор (Esc)">
+      <ToolButton
+        active={mode === 'select'}
+        onClick={() => onMode('select')}
+        title="Выбор (Esc)"
+        tourId="tool-select"
+      >
         <MousePointer2 className="w-4 h-4" />
         <span className="text-xs">Выбор</span>
       </ToolButton>
@@ -666,6 +790,7 @@ function Toolbar({
       {onShareLayout && (
         <button
           onClick={onShareLayout}
+          data-tour-id="tool-share"
           className="flex items-center gap-1 px-3 py-1 rounded text-xs bg-emerald-600 hover:bg-emerald-500 transition-colors"
         >
           <Send className="w-3 h-3" />
@@ -674,7 +799,16 @@ function Toolbar({
       )}
 
       <button
+        onClick={onStartTutorial}
+        className="flex items-center gap-1 px-3 py-1 rounded text-xs bg-cyan-700 hover:bg-cyan-600 transition-colors"
+      >
+        <CircleHelp className="w-3 h-3" />
+        Подсказки
+      </button>
+
+      <button
         onClick={onSave}
+        data-tour-id="tool-save"
         disabled={isSaving}
         className="flex items-center gap-1 px-3 py-1 rounded text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 transition-colors"
       >
@@ -689,17 +823,20 @@ function ToolButton({
   active,
   onClick,
   title,
+  tourId,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   title: string;
+  tourId?: string;
   children: React.ReactNode;
 }) {
   return (
     <button
       onClick={onClick}
       title={title}
+      data-tour-id={tourId}
       className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
         active
           ? 'bg-blue-600 text-white'
@@ -778,7 +915,7 @@ function PropertiesPanel({
   onPlaceBranching: () => void;
 }) {
   return (
-    <div className="w-56 bg-white border-l border-slate-200 flex flex-col overflow-y-auto">
+    <div data-tour-id="properties-panel" className="w-56 bg-white border-l border-slate-200 flex flex-col overflow-y-auto">
       <div className="px-3 py-2 border-b border-slate-200">
         <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
           Свойства
@@ -837,6 +974,7 @@ function HoseEndPropertiesPanel({
   hoseEnd,
   hose,
   hydrantLabel,
+  truckWater,
   onToggleActive,
   onSetAngle,
   onSetSpread,
@@ -845,6 +983,7 @@ function HoseEndPropertiesPanel({
   hoseEnd: MapLayout['hose_ends'][number];
   hose: MapLayout['hoses'][number] | null;
   hydrantLabel: string | null;
+  truckWater: { water: number; max_water: number } | null;
   onToggleActive: () => void;
   onSetAngle: (angle: number) => void;
   onSetSpread: (spread: number) => void;
@@ -855,8 +994,12 @@ function HoseEndPropertiesPanel({
   const hoseTitle = hose ? `${hose.hose_id}` : 'Неизвестный рукав';
   const spread = Math.max(10, Math.min(140, Math.round(hoseEnd.spread_deg ?? 50)));
 
+  const waterPct = truckWater && truckWater.max_water > 0
+    ? (truckWater.water / truckWater.max_water) * 100
+    : null;
+
   return (
-    <div className="w-56 bg-white border-l border-slate-200 flex flex-col overflow-y-auto">
+    <div data-tour-id="properties-panel" className="w-56 bg-white border-l border-slate-200 flex flex-col overflow-y-auto">
       <div className="px-3 py-2 border-b border-slate-200">
         <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
           Свойства конца
@@ -881,6 +1024,27 @@ function HoseEndPropertiesPanel({
           )}
         </div>
 
+        {/* Индикатор воды в баке */}
+        {truckWater && waterPct !== null && (
+          <div>
+            <div className="text-xs text-slate-500 mb-1">
+              Бак: {Math.round(truckWater.water)} / {Math.round(truckWater.max_water)} л
+            </div>
+            <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${Math.max(0, Math.min(100, waterPct))}%`,
+                  backgroundColor: waterPct > 30 ? '#3b82f6' : waterPct > 10 ? '#eab308' : '#ef4444',
+                }}
+              />
+            </div>
+            {truckWater.water <= 0 && (
+              <div className="text-xs text-red-600 font-medium mt-1">Бак пуст!</div>
+            )}
+          </div>
+        )}
+
         <button
           onClick={onToggleActive}
           className={`w-full px-2 py-1.5 rounded text-xs font-medium border transition-colors ${
@@ -889,7 +1053,9 @@ function HoseEndPropertiesPanel({
               : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
           }`}
         >
-          {hoseEnd.active ? 'Выключить конец' : 'Включить конец'}
+          {hoseEnd.active
+            ? (isHydrant ? 'Отключить гидрант' : 'Выключить полив')
+            : (isHydrant ? 'Подключить гидрант' : 'Включить полив')}
         </button>
 
         {!isHydrant && (
