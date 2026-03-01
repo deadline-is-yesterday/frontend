@@ -13,13 +13,9 @@ import { iconUrl } from './firemap/iconUrl';
 import FireGridLayer from './firemap/FireGridLayer';
 
 interface FireMapViewProps {
-<<<<<<< HEAD
-  mapId: string;
-  simState?: FireSimState | null;
-=======
   /** API-префикс (напр. "/game_logic" или "/chief"). */
   apiPrefix: string;
->>>>>>> 0e5ec85eb6749bbe2d10589a87f658c325bf4e4c
+  simState?: FireSimState | null;
 }
 
 const ZOOM_MIN = 0.3;
@@ -30,13 +26,8 @@ function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
 
-<<<<<<< HEAD
-export default function FireMapView({ mapId, simState }: FireMapViewProps) {
-  const { map, equipment, savedLayout, loading } = useFireMapData(mapId);
-=======
-export default function FireMapView({ apiPrefix }: FireMapViewProps) {
+export default function FireMapView({ apiPrefix, simState }: FireMapViewProps) {
   const { map, equipment, savedLayout, loading } = useFireMapData(apiPrefix);
->>>>>>> 0e5ec85eb6749bbe2d10589a87f658c325bf4e4c
   const {
     layout,
     mode,
