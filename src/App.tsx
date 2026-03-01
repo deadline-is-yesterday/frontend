@@ -53,7 +53,8 @@ export default function App() {
   const [zones, setZones] = useState<Zone[]>([]);
   const [stationResources, setStationResources] = useState<Record<string, number>>({});
   const [targetAddress, setTargetAddress] = useState<string>('');
-  const fireSim = useFireSim(scenario.simulationStarted ? 'default' : null);
+  const [activeGameId, setActiveGameId] = useState<string | null>(null);
+  const fireSim = useFireSim(scenario.simulationStarted ? activeGameId : null);
   const [sharedMapLayout, setSharedMapLayout] = useState<MapLayout | null>(null);
 
   // ── Auth handlers ──────────────────────────────────────────────────────────
@@ -101,7 +102,18 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', release);
   }, [studentRole]);
 
+  // Fetch active game id + running state on mount
+  useEffect(() => {
+    game.getStatus().then((st) => {
+      setActiveGameId(st.active_game_id);
+      if (st.is_running) {
+        setScenario((prev) => ({ ...prev, simulationStarted: true }));
+      }
+    }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleEnterSession = (_gameId: string) => {
+    setActiveGameId(_gameId);
     setScreen('session');
   };
 

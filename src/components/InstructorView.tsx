@@ -8,10 +8,8 @@ import {
   Droplets, Save, ArrowLeft, Check, Mic
 } from 'lucide-react';
 import { ScenarioState, Zone, ZoneType, Point, CallerDifficulty } from '../types';
-import { useLocalFireSim } from '../hooks/useLocalFireSim';
 import { useGame, type VehicleType } from '../hooks/useGame';
 import type { UseFireSimReturn } from '../hooks/useFireSim';
-import type { StartSimPayload } from '../types/firesim';
 import CompassControl from './CompassControl';
 
 // --- ЗАГЛУШКИ ДЛЯ БЭКЕНДА ---
@@ -130,7 +128,6 @@ export default function InstructorView({
   const [selectedTool, setSelectedTool] = useState<CellType | 'ruler' | 'hydrant' | null>('wall');
   const [isDrawing, setIsDrawing] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  const localSim = useLocalFireSim();
   const [showGridLines, setShowGridLines] = useState(true);
   const [showMapImage, setShowMapImage] = useState(true);
   const [showStructures, setShowStructures] = useState(true);
@@ -723,27 +720,15 @@ export default function InstructorView({
             const next = !isPlaying;
             setIsPlaying(next);
             setScenario({ ...scenario, simulationStarted: next });
-            // Обновляем is_running в БД
+            // Бэкенд создаёт / останавливает симуляцию
             fetch(`${API_BASE}/game/status`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ is_running: next }),
             }).catch(() => {});
             if (next) {
-              const walls: Array<{ x: number; y: number; hp: number }> = [];
-              const sources: Array<{ x: number; y: number; intensity: number }> = [];
-              for (let y = 0; y < grid.length; y++) {
-                for (let x = 0; x < (grid[y]?.length ?? 0); x++) {
-                  if (grid[y][x] === 'wall') walls.push({ x, y, hp: 100 });
-                  else if (grid[y][x] === 'fire') sources.push({ x, y, intensity: 1000 });
-                }
-              }
-              localSim.start({ width: resolution, height: gridRows, walls, sources });
-              // Стабы бэкенда
               sendScenarioSettings(scenario);
               startCallerAI(scenario.callerDifficulty, targetAddress);
-            } else {
-              localSim.stop();
             }
           }} className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-xs transition-all shadow-md border ${isPlaying ? 'bg-red-50 text-red-500 border-red-200 animate-pulse' : 'bg-green-600 text-white border-green-600 hover:bg-green-500'}`}>
             {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />} {isPlaying ? 'АКТИВНО' : 'ЗАПУСК'}
@@ -762,9 +747,9 @@ export default function InstructorView({
                 )))}
               </div>
 
-              {isPlaying && localSim.snapshot?.grid && (
+              {isPlaying && fireSim.simState?.grid && (
                 <div className="absolute inset-0 z-[15] pointer-events-none" style={{ display: 'grid', gridTemplateColumns: `repeat(${resolution}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)` }}>
-                  {localSim.snapshot.grid.map((row, y) =>
+                  {fireSim.simState.grid.map((row, y) =>
                     row.map((temp, x) => {
                       if (temp <= 0) return <div key={`t-${y}-${x}`} />;
                       if (temp < 0) return <div key={`t-${y}-${x}`} style={{ backgroundColor: 'rgba(100,100,100,0.7)' }} />;
@@ -860,11 +845,11 @@ export default function InstructorView({
                Демо-сценарий
              </button>
            )}
-           {isPlaying && localSim.snapshot && (
+           {isPlaying && fireSim.simState && (
              <div className="mt-3 bg-slate-50 p-3 rounded border border-slate-200 space-y-1">
-               <div className="text-[10px] text-slate-500">Тик: <span className="font-bold text-slate-800">{localSim.snapshot.ticks}</span></div>
-               <div className="text-[10px] text-slate-500">Источников: <span className="font-bold text-red-600">{localSim.snapshot.sources.length}</span></div>
-               <div className="text-[10px] text-slate-500">Макс. t°: <span className="font-bold text-orange-600">{Math.round(Math.max(...localSim.snapshot.grid.flat()))}°</span></div>
+               <div className="text-[10px] text-slate-500">Тик: <span className="font-bold text-slate-800">{fireSim.simState.ticks}</span></div>
+               <div className="text-[10px] text-slate-500">Источников: <span className="font-bold text-red-600">{fireSim.simState.sources.length}</span></div>
+               <div className="text-[10px] text-slate-500">Макс. t°: <span className="font-bold text-orange-600">{Math.round(Math.max(...fireSim.simState.grid.flat()))}°</span></div>
              </div>
            )}
         </div>
