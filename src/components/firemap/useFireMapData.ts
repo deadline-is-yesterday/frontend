@@ -53,7 +53,7 @@ const MOCK_EQUIPMENT: EquipmentSpec[] = [
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 
-export function useFireMapData(apiPrefix: string): {
+export function useFireMapData(dataPrefix = '/firemap'): {
   map: FireMap | null;
   equipment: EquipmentSpec[];
   savedLayout: MapLayout | null;
@@ -74,9 +74,9 @@ export function useFireMapData(apiPrefix: string): {
       setError(null);
       try {
         const [mapRes, eqRes, layoutRes] = await Promise.all([
-          fetch(`${API_BASE}${apiPrefix}/maps`, { signal: controller.signal }),
-          fetch(`${API_BASE}${apiPrefix}/equipment`, { signal: controller.signal }),
-          fetch(`${API_BASE}${apiPrefix}/maps/layout`, { signal: controller.signal }),
+          fetch(`${API_BASE}${dataPrefix}/maps`, { signal: controller.signal }),
+          fetch(`${API_BASE}${dataPrefix}/equipment`, { signal: controller.signal }),
+          fetch(`${API_BASE}${dataPrefix}/maps/layout`, { signal: controller.signal }),
         ]);
         if (!mapRes.ok || !eqRes.ok) throw new Error('Ошибка ответа сервера');
         const [mapData, eqData] = await Promise.all([mapRes.json(), eqRes.json()]);
@@ -105,7 +105,7 @@ export function useFireMapData(apiPrefix: string): {
 
     load();
     return () => controller.abort();
-  }, [apiPrefix]);
+  }, [dataPrefix]);
 
   return { map, equipment, savedLayout, loading, error };
 }

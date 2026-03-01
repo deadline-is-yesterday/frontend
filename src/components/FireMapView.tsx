@@ -11,8 +11,12 @@ import type { EditorMode, EquipmentSpec, FireMap, HoseSpec } from '../types/fire
 import { iconUrl } from './firemap/iconUrl';
 
 interface FireMapViewProps {
-  /** API-префикс (напр. "/game_logic" или "/chief"). */
-  apiPrefix: string;
+  /** Префикс для загрузки данных (maps/equipment/layout), по умолчанию '/firemap' */
+  dataPrefix?: string;
+  /** Эндпоинт синхронизации техники (POST/PUT/DELETE), напр. '/game_logic/car' */
+  equipmentEndpoint?: string;
+  /** Эндпоинт синхронизации рукавов (POST/PUT/DELETE), напр. '/game_logic/hose' */
+  hoseEndpoint?: string;
 }
 
 const ZOOM_MIN = 0.3;
@@ -23,8 +27,8 @@ function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
 
-export default function FireMapView({ apiPrefix }: FireMapViewProps) {
-  const { map, equipment, savedLayout, loading } = useFireMapData(apiPrefix);
+export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoint }: FireMapViewProps) {
+  const { map, equipment, savedLayout, loading } = useFireMapData(dataPrefix);
   const {
     layout,
     mode,
@@ -50,7 +54,7 @@ export default function FireMapView({ apiPrefix }: FireMapViewProps) {
     deleteBranching,
     syncHose,
     syncEquipment,
-  } = useFireMapState({ hoseEndpoint: `${apiPrefix}/hose`, equipmentEndpoint: `${apiPrefix}/car` });
+  } = useFireMapState({ hoseEndpoint, equipmentEndpoint });
 
   // Zoom & pan
   const [zoom, setZoom] = useState(1);
@@ -342,7 +346,7 @@ export default function FireMapView({ apiPrefix }: FireMapViewProps) {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:5000'}${apiPrefix}/maps/layout`, {
+      await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:5000'}${dataPrefix}/maps/layout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(layout),
