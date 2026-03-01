@@ -9,6 +9,7 @@ import LobbyScreen from './components/LobbyScreen';
 import { useSocket } from './hooks/useSocket';
 import { useFireSim } from './hooks/useFireSim';
 import { Role, ScenarioState, Zone } from './types';
+import type { MapLayout } from './types/firemap';
 
 type Screen = 'lobby' | 'session';
 
@@ -28,6 +29,7 @@ export default function App() {
     incidentLocation: null,
     simulationStarted: false,
     triggerType: 'call',
+    callerDifficulty: 'level1', // Обновлено
   });
 
   // Состояние карты и зон
@@ -41,6 +43,9 @@ export default function App() {
 
   // Симуляция огня — подключаемся только когда симуляция запущена
   const fireSim = useFireSim(scenario.simulationStarted ? 'default' : null);
+
+  // Карта, отправленная начальником штаба → РТП
+  const [sharedMapLayout, setSharedMapLayout] = useState<MapLayout | null>(null);
 
   const handleEnterSession = (_gameId: string) => {
     setScreen('session');
@@ -97,9 +102,9 @@ export default function App() {
             correctAddress={targetAddress}
           />
         )}
-        {activeRole === 'rtp' && <RTPView />}
+        {activeRole === 'rtp' && <RTPView sharedLayout={sharedMapLayout} />}
         {activeRole === 'squad' && <SquadView />}
-        {activeRole === 'chief' && <ChiefView simState={fireSim.simState} />}
+        {activeRole === 'chief' && <ChiefView simState={fireSim.simState} onShareLayout={setSharedMapLayout} />}
       </main>
 
       {/* Панель связи */}
