@@ -1,21 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
+import React, { useEffect, useRef, useState } from 'react';
+import { Socket } from 'socket.io-client';
 import { Mic, MicOff, Radio } from 'lucide-react';
 import { Role } from '../types';
 
-const BACKEND_URL = 'http://172.26.219.198:5000';
 const BUFFER_SIZE = 4096;
 
 interface Props {
   role: Role;
+  socketRef: React.RefObject<Socket | null>;
+  connected: boolean;
 }
 
-export default function CommunicationPanel({ role: _role }: Props) {
+export default function CommunicationPanel({ role: _role, socketRef, connected }: Props) {
   const [isActive, setIsActive] = useState(false);
   const [someoneActive, setSomeoneActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const socketRef = useRef<Socket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const txCtxRef = useRef<AudioContext | null>(null);
   const rxCtxRef = useRef<AudioContext | null>(null);
@@ -47,21 +47,20 @@ export default function CommunicationPanel({ role: _role }: Props) {
   }
 
   useEffect(() => {
-    const socket = io(BACKEND_URL);
-    socketRef.current = socket;
+    const socket = socketRef.current;
+    if (!socket) return;
 
-    socket.on('stack_update', ({ active }: { active: boolean }) => {
-      setSomeoneActive(active);
-    });
+    const onStack = ({ active }: { active: boolean }) => setSomeoneActive(active);
+    const onAudio = (data: ArrayBuffer) => playPcm(data);
 
-    socket.on('audio_chunk', (data: ArrayBuffer) => {
-      playPcm(data);
-    });
+    socket.on('stack_update', onStack);
+    socket.on('audio_chunk', onAudio);
 
     return () => {
-      socket.disconnect();
+      socket.off('stack_update', onStack);
+      socket.off('audio_chunk', onAudio);
     };
-  }, []);
+  }, [connected]);
 
   async function startTransmitting() {
     setError(null);
