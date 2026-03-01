@@ -188,7 +188,7 @@ export default function App() {
             <span className="text-sm font-bold text-slate-700">
               {studentRole === 'dispatcher' && '📞 Диспетчер'}
               {studentRole === 'rtp' && '🛡️ РТП'}
-              {studentRole === 'squad' && '👷 Боевой расчёт'}
+              {studentRole === 'squad' && '👷 Боевой участок'}
               {studentRole === 'chief' && '📋 Начальник штаба'}
             </span>
             <button

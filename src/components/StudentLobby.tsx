@@ -5,7 +5,7 @@ import { useGame, type RoleInfo } from '../hooks/useGame';
 const ROLE_META: Record<string, { label: string; icon: typeof Radio; color: string }> = {
   dispatcher: { label: 'Диспетчер',        icon: Radio,  color: 'blue' },
   rtp:        { label: 'РТП',              icon: Shield, color: 'red' },
-  squad:      { label: 'Боевой расчёт',    icon: Users,  color: 'amber' },
+  squad:      { label: 'Боевой участок',    icon: Users,  color: 'amber' },
   chief:      { label: 'Начальник штаба',  icon: Truck,  color: 'emerald' },
 };
 
