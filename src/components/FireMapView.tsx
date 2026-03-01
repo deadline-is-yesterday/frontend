@@ -349,7 +349,7 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:5000'}${dataPrefix}/maps/layout`, {
+      await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}${dataPrefix}/maps/layout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(layout),

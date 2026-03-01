@@ -7,7 +7,7 @@ const EMPTY_LAYOUT: MapLayout = {
   hoses: [],
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 /** Fire-and-forget запрос к бэку для конца рукава. */
 function syncHoseEndpoint(
