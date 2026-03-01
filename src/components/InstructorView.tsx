@@ -1,14 +1,40 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
-  Upload, Map as MapIcon, Wind, Droplets, Clock, Thermometer, 
-  Crosshair, Zap, Building, Square, 
-  BrickWall, DoorOpen, Maximize, Droplet, 
+  Upload, Map as MapIcon, Clock, Zap, Building, Square, 
+  BrickWall, Maximize, Droplet, 
   Undo, Redo, Magnet, CheckCircle, XCircle,
-  Layers, Plus, Trash2, Play, FileCheck
+  Plus, Play, FileCheck,
+  Eraser, Pause, Grid3X3, Image as ImageIcon,
+  Settings, Trash2,
+  Thermometer, Wind, Eye, EyeOff, Wand2,
+  DoorOpen, AppWindow, Layers, Ban, Truck, Navigation, Crosshair, Ruler, Edit2,
+  Droplets
 } from 'lucide-react';
 import { Zone, ZoneType, Point, ScenarioState } from '../types';
+import type { UseFireSimReturn } from '../hooks/useFireSim';
+import type { StartSimPayload } from '../types/firesim';
 import CompassControl from './CompassControl';
-import { YMaps, Map, Placemark } from '@pbe/react-yandex-maps';
+
+// --- ТИПЫ ТЕХНИКИ ---
+export type VehicleType = {
+  id: string;
+  name: string;
+  capacity: number;
+  type: 'AC' | 'AL' | 'ASA' | 'ASH';
+};
+
+export const AVAILABLE_VEHICLES: VehicleType[] = [
+  { id: 'ac40_130', name: 'АЦ-40 (130) 63Б', capacity: 2.35, type: 'AC' },
+  { id: 'ac40_131', name: 'АЦ-40 (131) 137А', capacity: 2.4, type: 'AC' },
+  { id: 'ac32_43253', name: 'АЦ-3,2-40 (43253)', capacity: 3.2, type: 'AC' },
+  { id: 'ac50_43118', name: 'АЦ-5,0-40 (43118)', capacity: 5.0, type: 'AC' },
+  { id: 'ac60_5557', name: 'АЦ-6,0-40 (Урал-5557)', capacity: 6.0, type: 'AC' },
+  { id: 'al_30', name: 'АЛ-30 (Автолестница)', capacity: 0, type: 'AL' },
+  { id: 'asa_20', name: 'АСА-20 (Спасательный)', capacity: 0, type: 'ASA' },
+  { id: 'ash_uaz', name: 'АШ (Штабной УАЗ)', capacity: 0, type: 'ASH' },
+];
+
+type CellType = 'empty' | 'wall' | 'fire' | 'water' | 'door' | 'window';
 
 // --- ГЕОМЕТРИЧЕСКИЕ ХЕЛПЕРЫ ---
 const getDistance = (p1: Point, p2: Point) => Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
@@ -28,487 +54,569 @@ interface InstructorViewProps {
   setScenario: (s: ScenarioState) => void;
   zones: Zone[];
   setZones: (z: Zone[]) => void;
+  stationResources: Record<string, number>;
+  setStationResources: (r: Record<string, number>) => void;
+  targetAddress: string;
+  setTargetAddress: (addr: string) => void;
+  setMapScale?: (scale: number) => void;
+  fireSim: UseFireSimReturn;
 }
 
-export default function InstructorView({ scenario, setScenario, zones, setZones }: InstructorViewProps) {
-  // --- STATE ---
+// Компонент клетки
+const Cell = React.memo(({ 
+  type, x, y, onMouseDown, onMouseEnter, showStructures, showGridLines 
+}: { 
+  type: CellType, x: number, y: number, 
+  onMouseDown: (y: number, x: number) => void, 
+  onMouseEnter: (y: number, x: number) => void,
+  showStructures: boolean,
+  showGridLines: boolean
+}) => {
+  return (
+    <div
+      onMouseDown={() => onMouseDown(y, x)}
+      onMouseEnter={() => onMouseEnter(y, x)}
+      className={`relative ${showGridLines ? 'border-[0.5px] border-slate-300/50' : ''}`}
+    >
+        {/* СТЕНЫ */}
+        {showStructures && type === 'wall' && <div className="absolute inset-0 bg-slate-700 border border-slate-800" />}
+        {showStructures && type === 'door' && <div className="absolute inset-0 bg-amber-600/80 border border-amber-700" />}
+        {showStructures && type === 'window' && <div className="absolute inset-0 bg-blue-300/50 border border-blue-400/80 backdrop-blur-[1px]" />}
+        
+        {/* ВОДА */}
+        {type === 'water' && <div className="absolute inset-0 bg-blue-500/60 border border-blue-400" />}
+
+        {/* ОГОНЬ */}
+        {type === 'fire' && <div className="absolute inset-0 bg-red-600/80 shadow-[0_0_15px_rgba(220,38,38,0.6)] animate-pulse" />}
+    </div>
+  );
+}, (prev, next) => {
+  return prev.type === next.type && 
+         prev.showStructures === next.showStructures && 
+         prev.showGridLines === next.showGridLines;
+});
+
+export default function InstructorView({
+    scenario, setScenario, zones, setZones,
+    stationResources, setStationResources,
+    targetAddress, setTargetAddress,
+    setMapScale, fireSim
+}: InstructorViewProps) {
+  
+  const [activeTab, setActiveTab] = useState<'map' | 'resources'>('map');
+  const [aspectRatio, setAspectRatio] = useState(16 / 9);
+  const [zoomLevel, setZoomLevel] = useState(100); 
+  const [resolution, setResolution] = useState(60); 
+  const [gridRows, setGridRows] = useState(Math.round(60 / (16/9)));
+
   const [mapImage, setMapImage] = useState<string | null>(null);
-  const [scale, setScale] = useState<number>(1);
-  const [currentTool, setCurrentTool] = useState<ZoneType | 'select' | 'scale'>('select');
+  const [grid, setGrid] = useState<CellType[][]>([]);
   
-  // Этажи
-  const [currentFloor, setCurrentFloor] = useState<number>(1);
-  const [floors, setFloors] = useState<number[]>([1]);
+  const [threshold, setThreshold] = useState(120);
+  const [isAutoDetecting, setIsAutoDetecting] = useState(false);
 
-  // Рисование
-  const [draftPoints, setDraftPoints] = useState<Point[]>([]);
-  const [cursorPos, setCursorPos] = useState<Point>({ x: 0, y: 0 });
-  const [snappedPos, setSnappedPos] = useState<Point | null>(null); 
+  const [history, setHistory] = useState<CellType[][][]>([]);
+  const [historyStep, setHistoryStep] = useState(-1);
+
+  const [selectedTool, setSelectedTool] = useState<CellType | 'ruler' | null>('wall');
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [showGridLines, setShowGridLines] = useState(true);
+  const [showMapImage, setShowMapImage] = useState(true);
+  const [showStructures, setShowStructures] = useState(true);
+
+  const [currentZoneTool, setCurrentZoneTool] = useState<ZoneType | 'select'>('select');
+  const [drawingPoints, setDrawingPoints] = useState<Point[]>([]);
   
-  // Настройки
-  const [showGlobalMap, setShowGlobalMap] = useState(false);
-  const [useEmptyCanvas, setUseEmptyCanvas] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isSnappingEnabled, setIsSnappingEnabled] = useState(true);
-
-  // История
-  const [history, setHistory] = useState<Zone[][]>([zones]);
-  const [historyStep, setHistoryStep] = useState(0);
+  const [calibrationPoints, setCalibrationPoints] = useState<Point[]>([]); 
+  const [showCalibrationModal, setShowCalibrationModal] = useState(false); 
+  const [realWorldDistance, setRealWorldDistance] = useState<string>('10'); 
+  const [currentScale, setCurrentScale] = useState<number | null>(null);
 
   const svgRef = useRef<SVGSVGElement>(null);
+  const selectedToolRef = useRef(selectedTool);
+  const isDrawingRef = useRef(isDrawing);
 
-  // --- УПРАВЛЕНИЕ ЭТАЖАМИ ---
-  const addFloor = () => {
-    const newFloor = floors[floors.length - 1] + 1;
-    setFloors([...floors, newFloor]);
-    setCurrentFloor(newFloor);
+  useEffect(() => { selectedToolRef.current = selectedTool; }, [selectedTool]);
+  useEffect(() => { isDrawingRef.current = isDrawing; }, [isDrawing]);
+
+  const selectObjectTool = (tool: CellType) => {
+    setSelectedTool(tool);
+    setCurrentZoneTool('select'); 
+    setCalibrationPoints([]); 
   };
 
-  const deleteFloor = (floorId: number) => {
-    if (floors.length === 1) return; // Нельзя удалить единственный этаж
-    // Удаляем этаж из списка
-    setFloors(floors.filter(f => f !== floorId));
-    // Удаляем все зоны этого этажа
-    const newZones = zones.filter(z => z.floor !== floorId);
-    saveToHistory(newZones);
-    // Переключаемся на первый этаж
-    setCurrentFloor(floors[0]);
+  const selectRulerTool = () => {
+    setSelectedTool('ruler');
+    setCurrentZoneTool('select');
+    setCalibrationPoints([]); 
   };
 
-  // --- ИСТОРИЯ ИЗМЕНЕНИЙ ---
-  const saveToHistory = (newZones: Zone[]) => {
-    const newHistory = history.slice(0, historyStep + 1);
-    newHistory.push(newZones);
-    setHistory(newHistory);
-    setHistoryStep(newHistory.length - 1);
-    setZones(newZones);
-  };
-
-  const handleGlobalUndo = useCallback(() => {
-    if (draftPoints.length > 0) {
-      setDraftPoints(prev => prev.slice(0, -1));
-      return;
-    }
-    if (historyStep > 0) {
-      const prevStep = historyStep - 1;
-      setHistoryStep(prevStep);
-      setZones(history[prevStep]);
-    }
-  }, [draftPoints, historyStep, history, setZones]);
-
-  const handleRedo = () => {
-    if (historyStep < history.length - 1) {
-      const nextStep = historyStep + 1;
-      setHistoryStep(nextStep);
-      setZones(history[nextStep]);
-    }
-  };
-
-  const finishCurrentShape = useCallback(() => {
-    if (draftPoints.length < 2 && currentTool !== 'fire_origin') return;
-    
-    // Для стен и заборов не замыкаем, для зданий - замыкаем
-    const shouldClose = ['building'].includes(currentTool as string);
-    const points = shouldClose ? [...draftPoints, draftPoints[0]] : draftPoints;
-    
-    const newZone: Zone = { 
-      id: Date.now().toString(), 
-      type: currentTool as ZoneType, 
-      points,
-      floor: currentFloor // Привязываем к текущему этажу
-    };
-    
-    saveToHistory([...zones, newZone]);
-    setDraftPoints([]);
-  }, [draftPoints, currentTool, zones, currentFloor]);
-
-  const cancelDrawing = useCallback(() => {
-    setDraftPoints([]);
-  }, []);
-
-  // Горячие клавиши
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); handleGlobalUndo(); }
-      if (e.key === 'Enter') { e.preventDefault(); finishCurrentShape(); }
-      if (e.key === 'Escape') { e.preventDefault(); cancelDrawing(); }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleGlobalUndo, finishCurrentShape, cancelDrawing]);
+    const newRows = Math.round(resolution / aspectRatio);
+    setGridRows(newRows);
 
-  // --- ЛОГИКА "МАГНИТА" ---
-  const calculateSnap = (mouseP: Point, isShiftHeld: boolean) => {
-    if (!isSnappingEnabled && !isShiftHeld) return mouseP;
-    let bestPoint = { ...mouseP };
-    let minDist = 15; 
-
-    if (isShiftHeld && draftPoints.length > 0) {
-      const last = draftPoints[draftPoints.length - 1];
-      const dx = Math.abs(mouseP.x - last.x);
-      const dy = Math.abs(mouseP.y - last.y);
-      if (dx > dy) bestPoint.y = last.y; else bestPoint.x = last.x;
-    }
-
-    if (isSnappingEnabled) {
-      // Ищем точки только на ТЕКУЩЕМ этаже
-      zones.filter(z => z.floor === currentFloor).forEach(z => {
-        z.points.forEach(p => {
-          const d = getDistance(bestPoint, p);
-          if (d < minDist) { minDist = d; bestPoint = p; }
-        });
-        
-        if (['door', 'window', 'wall'].includes(currentTool as string)) {
-            if (z.type === 'wall' || z.type === 'building') {
-                for (let i = 0; i < z.points.length - 1; i++) {
-                    const closest = getClosestPointOnSegment(bestPoint, z.points[i], z.points[i+1]);
-                    const d = getDistance(bestPoint, closest);
-                    if (d < minDist) { minDist = d; bestPoint = closest; }
-                }
+    setGrid(prev => {
+      const newGrid: CellType[][] = Array(newRows).fill(null).map(() => Array(resolution).fill('empty'));
+      if (prev.length > 0) {
+        for (let y = 0; y < Math.min(newRows, prev.length); y++) {
+            for (let x = 0; x < Math.min(resolution, prev[0].length); x++) {
+                newGrid[y][x] = prev[y][x];
             }
         }
-      });
-      if (draftPoints.length > 2) {
-         if (getDistance(bestPoint, draftPoints[0]) < minDist) bestPoint = draftPoints[0];
       }
-    }
-    return bestPoint;
-  };
+      return newGrid;
+    });
+    setHistory([]);
+    setHistoryStep(-1);
+  }, [resolution, aspectRatio]);
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!svgRef.current) return;
-    const rect = svgRef.current.getBoundingClientRect();
-    const rawX = e.clientX - rect.left;
-    const rawY = e.clientY - rect.top;
-    setCursorPos({ x: rawX, y: rawY });
-    setSnappedPos(calculateSnap({ x: rawX, y: rawY }, e.shiftKey));
-  };
+  const handleMapClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (activeTab !== 'map') return;
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
-  const handleMapClick = (e: React.MouseEvent) => {
-    if (currentTool === 'select' || !snappedPos) return;
-
-    if (currentTool === 'fire_origin' || currentTool === 'water_source') {
-      const newZone = { 
-        id: Date.now().toString(), 
-        type: currentTool, 
-        points: [snappedPos],
-        floor: currentFloor 
-      };
-      saveToHistory([...zones, newZone]);
-      setCurrentTool('select');
-      return;
-    }
-    // Замыкание фигуры
-    if (draftPoints.length > 0 && draftPoints[0].x === snappedPos.x && draftPoints[0].y === snappedPos.y && draftPoints.length > 2) {
-        finishCurrentShape();
-    } else {
-        setDraftPoints([...draftPoints, snappedPos]);
-    }
-  };
-
-  // --- СПЕЦИАЛЬНЫЕ ФУНКЦИИ ---
-
-  // Удалить картинку-подложку (Завершить схему)
-  const finishSchema = () => {
-    if (window.confirm('Вы уверены? Загруженная схема (картинка) будет удалена, останутся только нарисованные вами объекты.')) {
-      setMapImage(null);
-      setUseEmptyCanvas(true);
-    }
-  };
-
-  // Запуск симуляции
-  const startSimulation = async () => {
-    if (!scenario.incidentLocation) {
-        alert('Сначала выберите место инцидента на глобальной карте!');
-        setShowGlobalMap(true);
+    if (selectedTool === 'ruler') {
+        const newPoints = [...calibrationPoints, { x, y }];
+        if (newPoints.length === 2) {
+            setCalibrationPoints(newPoints);
+            setShowCalibrationModal(true);
+        } else {
+            setCalibrationPoints(newPoints);
+        }
         return;
     }
-    
-    // Здесь мы формируем пакет данных для старта
-    const simulationData = {
-        scenario: { ...scenario, simulationStarted: true },
-        zones: zones,
-        floors: floors
-    };
 
-    setScenario({ ...scenario, simulationStarted: true });
-    
-    // В реальном проекте здесь будет POST запрос
-    console.log('Simulation Starting with data:', simulationData);
-    
-    await fetch('/api/simulation/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(simulationData)
-    }).catch(err => console.error("Sim start fake error:", err)); // Игнорируем ошибку т.к. бэкенда нет
-    
-    alert('Симуляция запущена! Данные переданы.');
+    if (currentZoneTool !== 'select') {
+        setDrawingPoints([...drawingPoints, { x, y }]);
+        return;
+    }
   };
+
+  const finishPolygon = () => {
+    if (drawingPoints.length > 2) {
+      setZones([...zones, { id: Date.now().toString(), type: currentZoneTool as ZoneType, points: drawingPoints, floor: 1 }]);
+    }
+    setDrawingPoints([]);
+    setCurrentZoneTool('select');
+  };
+
+  const confirmCalibration = () => {
+      if (calibrationPoints.length !== 2) return;
+      const dx = calibrationPoints[1].x - calibrationPoints[0].x;
+      const dy = calibrationPoints[1].y - calibrationPoints[0].y;
+      const pixelDistance = Math.sqrt(dx*dx + dy*dy);
+      const meters = parseFloat(realWorldDistance);
+      if (!isNaN(meters) && meters > 0 && pixelDistance > 0) {
+          const scale = meters / pixelDistance;
+          setCurrentScale(scale);
+          if (setMapScale) setMapScale(scale);
+          setShowCalibrationModal(false);
+          setCalibrationPoints([]);
+          selectObjectTool('wall');
+      } else {
+          alert("Некорректное значение дистанции");
+      }
+  };
+
+  const detectWalls = useCallback((sensitivity: number) => {
+    if (!mapImage) return;
+    const img = new Image();
+    img.src = mapImage;
+    img.onload = () => {
+        const sampleRate = 5; 
+        const renderWidth = resolution * sampleRate;
+        const renderHeight = gridRows * sampleRate;
+        const canvas = document.createElement('canvas');
+        canvas.width = renderWidth;
+        canvas.height = renderHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, renderWidth, renderHeight);
+        const imageData = ctx.getImageData(0, 0, renderWidth, renderHeight).data;
+        setGrid(prevGrid => {
+            const newGrid = prevGrid.map(row => [...row]);
+            for (let gy = 0; gy < gridRows; gy++) {
+                for (let gx = 0; gx < resolution; gx++) {
+                    if (['fire', 'water', 'door', 'window'].includes(newGrid[gy][gx])) continue;
+                    let totalDarknessScore = 0;
+                    let samples = 0;
+                    const startX = gx * sampleRate;
+                    const startY = gy * sampleRate;
+                    for (let y = startY; y < startY + sampleRate; y++) {
+                        for (let x = startX; x < startX + sampleRate; x++) {
+                            const i = (y * renderWidth + x) * 4;
+                            const brightness = (imageData[i] + imageData[i + 1] + imageData[i + 2]) / 3 / 255;
+                            totalDarknessScore += Math.pow(1 - brightness, 3);
+                            samples++;
+                        }
+                    }
+                    const avgScore = totalDarknessScore / samples;
+                    const triggerLevel = Math.pow((255 - sensitivity) / 255, 3);
+                    if (avgScore > triggerLevel) newGrid[gy][gx] = 'wall';
+                    else if (newGrid[gy][gx] === 'wall') newGrid[gy][gx] = 'empty';
+                }
+            }
+            return newGrid;
+        });
+    };
+  }, [mapImage, resolution, gridRows]);
+
+  useEffect(() => {
+      if (isAutoDetecting) detectWalls(threshold);
+  }, [threshold, isAutoDetecting, detectWalls]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onload = (event) => {
-        setMapImage(event.target?.result as string);
-        setUseEmptyCanvas(false);
+        const img = new Image();
+        img.onload = () => {
+            const ratio = img.width / img.height;
+            setAspectRatio(ratio);
+            setMapImage(event.target?.result as string);
+            setGridRows(Math.round(resolution / ratio));
+        };
+        img.src = event.target?.result as string;
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const handleGlobalMapClick = (e: any) => {
-    const coords = e.get('coords');
-    setScenario({ ...scenario, incidentLocation: coords });
+  const saveToHistory = (newGrid: CellType[][]) => {
+    const newHistory = history.slice(0, historyStep + 1);
+    newHistory.push(newGrid.map(row => [...row]));
+    if (newHistory.length > 50) newHistory.shift();
+    setHistory(newHistory);
+    setHistoryStep(newHistory.length - 1);
+    setGrid(newGrid);
+  };
+
+  const undo = () => {
+    if (historyStep > 0) {
+      const prevStep = historyStep - 1;
+      setHistoryStep(prevStep);
+      setGrid(history[prevStep].map(row => [...row]));
+    }
+  };
+
+  const redo = () => {
+    if (historyStep < history.length - 1) {
+      const nextStep = historyStep + 1;
+      setHistoryStep(nextStep);
+      setGrid(history[nextStep].map(row => [...row]));
+    }
+  };
+
+  const clearAll = () => {
+      if(confirm('Очистить всё поле и сбросить масштаб? Это действие нельзя отменить.')) {
+          const emptyGrid = Array(gridRows).fill(null).map(() => Array(resolution).fill('empty'));
+          setGrid(emptyGrid);
+          saveToHistory(emptyGrid);
+          setCurrentScale(null);
+          setCalibrationPoints([]);
+          if(setMapScale) setMapScale(1);
+          setZones([]); 
+      }
+  };
+
+  const handleMouseDown = useCallback((y: number, x: number) => {
+    if (isPlaying || selectedTool === 'ruler' || selectedTool === null) return; 
+    setIsDrawing(true);
+    isDrawingRef.current = true;
+    
+    setGrid(prev => {
+        const newGrid = prev.map(row => [...row]);
+        const targetTool = selectedToolRef.current; 
+        const target = targetTool === 'empty' ? 'empty' : targetTool as CellType;
+        if (newGrid[y][x] !== target) newGrid[y][x] = target;
+        return newGrid;
+    });
+  }, [isPlaying, selectedTool]);
+
+  const handleMouseEnter = useCallback((y: number, x: number) => {
+    if (isDrawingRef.current && !isPlaying && selectedToolRef.current !== 'ruler' && selectedToolRef.current !== null) {
+        setGrid(prev => {
+            const newGrid = prev.map(row => [...row]);
+            const targetTool = selectedToolRef.current;
+            const target = targetTool === 'empty' ? 'empty' : targetTool as CellType;
+            if (newGrid[y][x] !== target) newGrid[y][x] = target;
+            return newGrid;
+        });
+    }
+  }, [isPlaying]);
+
+  const handleMouseUp = () => {
+    if (isDrawingRef.current) {
+        setIsDrawing(false);
+        isDrawingRef.current = false;
+        saveToHistory(grid);
+    }
   };
 
   return (
-    <div className="flex h-full select-none">
-      {/* Sidebar */}
-      <div className="w-80 bg-white border-r border-slate-200 flex flex-col overflow-y-auto">
-        
-        {/* Undo/Redo & Floor Control */}
-        <div className="p-2 border-b border-slate-200 bg-slate-50 sticky top-0 z-10">
-             <div className="flex justify-between items-center mb-2">
-                 <div className="flex gap-1">
-                   <button onClick={handleGlobalUndo} disabled={historyStep === 0 && draftPoints.length === 0} className="p-2 bg-white rounded border hover:bg-slate-100 disabled:opacity-50"><Undo className="w-4 h-4" /></button>
-                   <button onClick={handleRedo} disabled={historyStep === history.length - 1} className="p-2 bg-white rounded border hover:bg-slate-100 disabled:opacity-50"><Redo className="w-4 h-4" /></button>
-                 </div>
-                 <button onClick={() => setIsSnappingEnabled(!isSnappingEnabled)} className={`p-2 rounded flex gap-2 text-xs font-bold ${isSnappingEnabled ? 'bg-blue-100 text-blue-700' : 'text-slate-500'}`}>
-                    <Magnet className="w-4 h-4" /> {isSnappingEnabled ? 'ON' : 'OFF'}
-                 </button>
-             </div>
-             
-             {/* Управление этажами */}
-             <div className="flex items-center justify-between bg-white p-2 rounded border border-slate-200">
-                <div className="flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-slate-500"/>
-                    <span className="text-sm font-semibold">Этаж:</span>
-                    <select 
-                        value={currentFloor} 
-                        onChange={(e) => setCurrentFloor(Number(e.target.value))}
-                        className="text-sm border-none bg-transparent font-bold text-blue-600 cursor-pointer focus:ring-0"
-                    >
-                        {floors.map(f => <option key={f} value={f}>{f}</option>)}
-                    </select>
-                </div>
-                <div className="flex gap-1">
-                    <button onClick={addFloor} className="p-1 hover:bg-green-100 text-green-600 rounded" title="Добавить этаж"><Plus className="w-4 h-4"/></button>
-                    <button onClick={() => deleteFloor(currentFloor)} className="p-1 hover:bg-red-100 text-red-600 rounded" title="Удалить этаж"><Trash2 className="w-4 h-4"/></button>
-                </div>
-             </div>
+    <div className="flex h-full bg-slate-50 text-slate-800 font-sans overflow-hidden">
+      
+      {/* ЛЕВАЯ ПАНЕЛЬ */}
+      <div className="w-80 flex flex-col border-r border-slate-200 bg-white z-20 shadow-lg h-full flex-shrink-0">
+        <div className="flex border-b border-slate-200 shrink-0">
+            <button onClick={() => setActiveTab('map')} className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider ${activeTab === 'map' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>Карта</button>
+            <button onClick={() => setActiveTab('resources')} className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider ${activeTab === 'resources' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>Ресурсы</button>
         </div>
 
-        {/* Сценарий и Действия */}
-        <div className="p-4 border-b border-slate-200 space-y-3">
-           <button onClick={() => setShowGlobalMap(!showGlobalMap)} className="w-full py-2 bg-slate-100 border border-slate-300 rounded-lg text-sm hover:bg-slate-200 flex items-center justify-center gap-2">
-              <MapIcon className="w-4 h-4"/> {showGlobalMap ? 'Вернуться к схеме' : 'Глобальная карта'}
-           </button>
-           
-           {!showGlobalMap && mapImage && (
-               <button onClick={finishSchema} className="w-full py-2 bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-sm hover:bg-amber-200 flex items-center justify-center gap-2">
-                  <FileCheck className="w-4 h-4"/> Завершить схему
-               </button>
-           )}
+        {activeTab === 'map' ? (
+            <div className="flex-1 flex flex-col overflow-y-auto">
+                <div className="p-4">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase mb-2">Объекты</div>
+                    <div className="grid grid-cols-3 gap-2">
+                        <ToolButton active={selectedTool === 'wall'} onClick={() => selectObjectTool('wall')} icon={<BrickWall />} label="СТЕНА" />
+                        <ToolButton active={selectedTool === 'door'} onClick={() => selectObjectTool('door')} icon={<DoorOpen />} label="ДВЕРЬ" color="text-amber-600" />
+                        <ToolButton active={selectedTool === 'window'} onClick={() => selectObjectTool('window')} icon={<AppWindow />} label="ОКНО" color="text-blue-500" />
+                        <ToolButton active={selectedTool === 'water'} onClick={() => selectObjectTool('water')} icon={<Droplets />} label="ВОДА" color="text-blue-600" />
+                        <ToolButton active={selectedTool === 'empty'} onClick={() => selectObjectTool('empty')} icon={<Eraser />} label="ЛАСТИК" />
+                    </div>
+                    
+                    <div className="text-[10px] font-bold text-slate-400 uppercase mt-4 mb-2">Зоны & Масштаб</div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="col-span-2">
+                            <ToolButton active={selectedTool === 'fire'} onClick={() => selectObjectTool('fire')} icon={<Crosshair />} label="ОЧАГ ПОЖАРА" color="text-red-600" />
+                        </div>
+                        <div className="col-span-2">
+                            {currentScale ? (
+                                <div className="bg-blue-50 border border-blue-200 p-2 rounded-lg flex items-center justify-between group">
+                                    <div className="flex flex-col">
+                                        <span className="text-[9px] text-blue-600 font-bold uppercase">Масштаб</span>
+                                        <span className="text-xs text-slate-900 font-mono">1px = {currentScale.toFixed(3)}м</span>
+                                    </div>
+                                    <button onClick={selectRulerTool} className="p-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors" title="Изменить масштаб"><Edit2 className="w-3 h-3" /></button>
+                                </div>
+                            ) : (
+                                <button onClick={selectRulerTool} className={`w-full flex flex-col items-center justify-center p-2.5 rounded-lg border transition-all ${selectedTool === 'ruler' ? 'bg-blue-100 border-blue-400 text-blue-800' : 'bg-transparent border-slate-200 hover:bg-slate-50'}`}>
+                                    <div className="mb-1"><Ruler className="w-4 h-4" /></div>
+                                    <span className="text-[9px] font-bold uppercase">Задать Масштаб</span>
+                                </button>
+                            )}
+                        </div>
+                    </div>
 
-           <button onClick={startSimulation} className="w-full py-3 bg-indigo-600 text-white shadow-lg rounded-lg text-sm font-bold hover:bg-indigo-700 flex items-center justify-center gap-2">
-              <Play className="w-4 h-4 fill-current"/> НАЧАТЬ СИМУЛЯЦИЮ
-           </button>
-        </div>
-
-        {/* Инструменты */}
-        {!showGlobalMap && (
-        <div className="p-4 border-b border-slate-200">
-           {/* Загрузка, если нет изображения и не пустой холст */}
-           {!mapImage && !useEmptyCanvas && (
-             <label className="flex items-center justify-center w-full px-4 py-8 bg-slate-50 border-2 border-slate-300 border-dashed rounded-lg cursor-pointer hover:bg-white mb-4">
-                <div className="text-center">
-                    <Upload className="w-8 h-8 mx-auto text-slate-400 mb-2" />
-                    <span className="text-sm text-slate-600">Загрузить план здания</span>
+                    {drawingPoints.length > 0 && (
+                        <button onClick={finishPolygon} className="mt-3 w-full py-2 bg-blue-600 text-white text-xs font-bold rounded hover:bg-blue-500 shadow-md">ЗАВЕРШИТЬ ЗОНУ ({drawingPoints.length})</button>
+                    )}
                 </div>
-                <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
-             </label>
-           )}
 
-          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Конструкции</h2>
-          <div className="grid grid-cols-3 gap-2 mb-4">
-            <ToolButton active={currentTool === 'wall'} onClick={() => setCurrentTool('wall')} icon={<BrickWall />} label="Стена" />
-            <ToolButton active={currentTool === 'door'} onClick={() => setCurrentTool('door')} icon={<DoorOpen />} label="Дверь" />
-            <ToolButton active={currentTool === 'window'} onClick={() => setCurrentTool('window')} icon={<Maximize />} label="Окно" />
-            <ToolButton active={currentTool === 'fence'} onClick={() => setCurrentTool('fence')} icon={<Square />} label="Забор" />
-            <ToolButton active={currentTool === 'building'} onClick={() => setCurrentTool('building')} icon={<Building />} label="Здание" />
-          </div>
+                <div className="h-px bg-slate-200 mx-4 mb-4"></div>
 
-          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Обстановка</h2>
-          <div className="grid grid-cols-2 gap-2">
-            <ToolButton active={currentTool === 'fire_origin'} onClick={() => setCurrentTool('fire_origin')} icon={<Crosshair />} label="Очаг возгорания" />
-            <ToolButton active={currentTool === 'water_source'} onClick={() => setCurrentTool('water_source')} icon={<Droplet />} label="Водоисточник" />
-          </div>
-
-          {/* Панель рисования */}
-          {draftPoints.length > 0 && (
-             <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-100 shadow-sm">
-                <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs font-bold text-blue-800">Точек: {draftPoints.length}</span>
+                <div className="flex gap-2 px-4 mb-4">
+                    <button onClick={undo} disabled={historyStep <= 0} className="flex-1 p-2 bg-white rounded hover:bg-slate-50 disabled:opacity-30 text-slate-600 border border-slate-200 shadow-sm"><Undo className="w-4 h-4 mx-auto" /></button>
+                    <button onClick={redo} disabled={historyStep >= history.length - 1} className="flex-1 p-2 bg-white rounded hover:bg-slate-50 disabled:opacity-30 text-slate-600 border border-slate-200 shadow-sm"><Redo className="w-4 h-4 mx-auto" /></button>
+                    <button onClick={clearAll} className="flex-1 p-2 bg-red-50 text-red-600 rounded hover:bg-red-100 border border-red-200 shadow-sm"><Trash2 className="w-4 h-4 mx-auto" /></button>
                 </div>
-                <div className="flex gap-2">
-                    <button onClick={finishCurrentShape} className="flex-1 py-1.5 bg-green-600 text-white text-xs font-medium rounded hover:bg-green-700 flex items-center justify-center gap-1">
-                        <CheckCircle className="w-3 h-3" /> Готово (Enter)
-                    </button>
-                    <button onClick={cancelDrawing} className="px-3 py-1.5 bg-white border border-red-200 text-red-600 text-xs font-medium rounded hover:bg-red-50 flex items-center justify-center gap-1">
-                        <XCircle className="w-3 h-3" /> Сброс
-                    </button>
+            </div>
+        ) : (
+            <div className="flex-1 flex flex-col p-4 space-y-6 overflow-y-auto">
+                <div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase mb-3 flex items-center gap-2"><Navigation className="w-3 h-3" /> Целевой адрес</div>
+                    <input type="text" value={targetAddress} onChange={(e) => setTargetAddress(e.target.value)} placeholder="Напр: ул. Ленина, 42" className="w-full bg-white border border-slate-300 rounded px-3 py-2 text-sm text-slate-900 focus:border-blue-500 outline-none placeholder-slate-400 shadow-sm" />
+                    <p className="text-[9px] text-slate-500 mt-2 leading-relaxed">Этот адрес должен выяснить диспетчер в разговоре.</p>
                 </div>
-             </div>
-          )}
-        </div>
+                <div className="h-px bg-slate-200"></div>
+                <div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase mb-3 flex items-center gap-2"><Truck className="w-3 h-3" /> Конфигурация Депо</div>
+                    <div className="space-y-3">
+                        {AVAILABLE_VEHICLES.map(v => (
+                            <div key={v.id} className="bg-white p-3 rounded border border-slate-200 flex items-center justify-between hover:border-blue-300 transition-colors shadow-sm">
+                                <div className="flex-1 min-w-0 pr-2">
+                                    <div className="text-xs font-bold text-slate-800 truncate">{v.name}</div>
+                                    <div className="text-[10px] text-slate-500">{v.capacity > 0 ? `Вода: ${v.capacity}т` : 'Спецтехника'}</div>
+                                </div>
+                                <div className="flex items-center gap-2 bg-slate-50 rounded p-1 border border-slate-200">
+                                    <button onClick={() => setStationResources({...stationResources, [v.id]: Math.max(0, (stationResources[v.id] || 0) - 1)})} className="w-6 h-6 rounded bg-white text-slate-500 hover:text-blue-600 border border-slate-200 flex items-center justify-center">-</button>
+                                    <span className="w-6 text-center text-sm font-mono font-bold text-blue-600">{stationResources[v.id] || 0}</span>
+                                    <button onClick={() => setStationResources({...stationResources, [v.id]: (stationResources[v.id] || 0) + 1})} className="w-6 h-6 rounded bg-white text-slate-500 hover:text-blue-600 border border-slate-200 flex items-center justify-center">+</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
         )}
-
-        {/* Настройки среды */}
-        <div className="p-4 border-b border-slate-200">
-          <h2 className="text-lg font-semibold text-slate-800 mb-3">Сценарий</h2>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] text-slate-500 uppercase">Температура</label>
-                  <div className="flex items-center border rounded px-2 py-1">
-                      <Thermometer className="w-3 h-3 text-slate-400 mr-1"/>
-                      <input type="number" value={scenario.temperature} onChange={e => setScenario({...scenario, temperature: Number(e.target.value)})} className="w-full text-sm outline-none" />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[10px] text-slate-500 uppercase">Ветер (м/с)</label>
-                  <div className="flex items-center border rounded px-2 py-1">
-                      <Wind className="w-3 h-3 text-slate-400 mr-1"/>
-                      <input type="number" value={scenario.windSpeed} onChange={e => setScenario({...scenario, windSpeed: Number(e.target.value)})} className="w-full text-sm outline-none" />
-                  </div>
-                </div>
-            </div>
-            <div className="flex gap-4 justify-around py-2">
-              <CompassControl label="Ветер" value={scenario.windDirection} onChange={(val) => setScenario({...scenario, windDirection: val})} color="blue" />
-              <CompassControl label="Север" value={scenario.northDirection} onChange={(val) => setScenario({...scenario, northDirection: val})} color="red" />
-            </div>
-          </div>
-        </div>
-
-        {/* Вводные */}
-        <div className="p-4">
-          <h2 className="text-lg font-semibold text-slate-800 mb-3 flex items-center gap-2">
-            <Zap className="w-5 h-5 text-amber-500" />
-            Вводные
-          </h2>
-          <div className="space-y-2">
-            <EventButton label="Отказ техники" />
-            <EventButton label="Изменение ветра" />
-            <EventButton label="Обрушение конструкции" />
-          </div>
-        </div>
       </div>
 
-      {/* Map Area */}
-      <div className="flex-1 bg-slate-200 relative overflow-auto flex items-center justify-center">
-        {showGlobalMap ? (
-           <div className="w-full h-full relative">
-             <YMaps>
-               <Map defaultState={{ center: [43.4056, 39.9550], zoom: 13 }} width="100%" height="100%" onClick={handleGlobalMapClick}>
-                 {scenario.incidentLocation && <Placemark geometry={scenario.incidentLocation} options={{ preset: 'islands#redFireIcon' }} />}
-               </Map>
-             </YMaps>
-             {scenario.incidentLocation && (
-                 <div className="absolute top-4 left-4 bg-white p-3 rounded-lg shadow-md z-10">
-                   <p className="text-sm font-medium">Координаты: {scenario.incidentLocation[0].toFixed(4)}, {scenario.incidentLocation[1].toFixed(4)}</p>
-                 </div>
-             )}
-           </div>
-        ) : (mapImage || useEmptyCanvas) ? (
-          <div 
-            className="relative bg-white shadow-2xl cursor-crosshair m-8 border border-slate-300"
-            style={useEmptyCanvas ? { width: 1000, height: 800 } : {}}
-            onMouseMove={handleMouseMove}
-            onClick={handleMapClick}
-            onContextMenu={(e) => { e.preventDefault(); finishCurrentShape(); }} 
-          >
-            {/* ПОДЛОЖКА (Изображение) */}
-            {mapImage && <img src={mapImage} alt="Map" className="max-w-none pointer-events-none select-none opacity-50 hover:opacity-100 transition-opacity" />}
-            
-            <svg ref={svgRef} className="absolute top-0 left-0 w-full h-full pointer-events-none">
-              {useEmptyCanvas && !mapImage && <rect width="100%" height="100%" fill="#ffffff" />}
-              
-              {/* Рендеринг только зон ТЕКУЩЕГО этажа */}
-              {zones.filter(z => z.floor === currentFloor).map(zone => <ZoneRenderer key={zone.id} zone={zone} />)}
-
-              {/* Драфт (рисование) */}
-              {draftPoints.length > 0 && (
-                <>
-                  <polyline points={draftPoints.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#2563eb" strokeWidth="2" />
-                  {snappedPos && (
-                      <line x1={draftPoints[draftPoints.length-1].x} y1={draftPoints[draftPoints.length-1].y} x2={snappedPos.x} y2={snappedPos.y} stroke="#2563eb" strokeWidth="1" strokeDasharray="4 4" opacity="0.6"/>
-                  )}
-                  {draftPoints.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r="3" fill="#fff" stroke="#2563eb" strokeWidth="1.5" />)}
-                </>
-              )}
-
-              {/* Курсор */}
-              {snappedPos && currentTool !== 'select' && (
-                  <g transform={`translate(${snappedPos.x}, ${snappedPos.y})`}>
-                      <circle r="4" fill="none" stroke="#ef4444" strokeWidth="2" />
-                  </g>
-              )}
-            </svg>
-
-            {/* Индикатор этажа на карте */}
-            <div className="absolute top-4 left-4 bg-white/90 px-3 py-1 rounded shadow text-xs font-bold text-slate-600 pointer-events-none">
-                ЭТАЖ {currentFloor}
-            </div>
-
-            {/* Компасы */}
-            <div className="absolute top-4 right-4 w-12 h-12 bg-white/80 rounded-full shadow flex items-center justify-center pointer-events-none">
-              <div style={{ transform: `rotate(${scenario.northDirection}deg)` }} className="text-red-500 font-bold flex flex-col items-center">
-                <span className="text-[10px] leading-none">С</span><div className="w-1 h-4 bg-red-500"></div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="text-center">
-             <div className="p-8 bg-slate-100 rounded-xl border border-slate-300">
-                <p className="text-slate-500 mb-4">Загрузите схему в меню слева или начните с пустого</p>
-                <button onClick={() => setUseEmptyCanvas(true)} className="px-6 py-3 bg-white shadow rounded-lg font-medium text-slate-700 hover:text-blue-600">
-                   Начать с чистого листа
+      {/* ЦЕНТРАЛЬНАЯ ЧАСТЬ */}
+      <div className="flex-1 flex flex-col relative overflow-hidden bg-slate-100">
+        <div className="h-16 border-b border-slate-200 bg-white flex items-center justify-between px-6 z-10 shadow-sm shrink-0">
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2 p-1 bg-slate-50 rounded-lg border border-slate-200">
+                 <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-200 transition-colors px-3 py-1.5 rounded">
+                    <ImageIcon className="w-4 h-4 text-blue-600" />
+                    <span className="text-[10px] font-bold text-slate-700">СХЕМА</span>
+                    <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+                </label>
+                <div className="w-px h-4 bg-slate-300"></div>
+                <button onClick={() => setShowMapImage(!showMapImage)} className={`p-1.5 rounded hover:bg-slate-200 ${showMapImage ? 'text-blue-600' : 'text-slate-400'}`}>
+                    {showMapImage ? <Eye className="w-4 h-4"/> : <EyeOff className="w-4 h-4"/>}
                 </button>
-             </div>
+            </div>
+
+            {mapImage && (
+              <div className={`flex items-center gap-3 bg-slate-50 p-1.5 rounded-lg border border-slate-200 transition-all ${isPlaying ? 'opacity-40 pointer-events-none grayscale' : ''}`}>
+                  <button onClick={() => { const newState = !isAutoDetecting; setIsAutoDetecting(newState); if(newState) detectWalls(threshold); else saveToHistory(grid); }} className={`flex items-center gap-2 px-3 py-1.5 rounded transition-all ${isAutoDetecting ? 'bg-purple-600 text-white shadow-md' : 'hover:bg-slate-200 text-purple-600'}`}>
+                      <Wand2 className="w-4 h-4" /><span className="text-[10px] font-bold">{isAutoDetecting ? 'ГОТОВО' : 'АВТО'}</span>
+                  </button>
+                  {isAutoDetecting && (<div className="flex items-center gap-2 px-2"><input type="range" min="10" max="250" step="5" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} className="w-24 h-1.5 bg-slate-300 rounded-lg appearance-none cursor-pointer accent-purple-500"/></div>)}
+              </div>
+            )}
+
+            <div className="h-6 w-px bg-slate-200"></div>
+
+            <div className={`flex flex-col w-40 transition-all ${isPlaying ? 'opacity-40 pointer-events-none grayscale' : ''}`}>
+                 <span className="text-[8px] text-slate-400 font-bold mb-0.5 flex justify-between"><span>ДЕТАЛИЗАЦИЯ</span><span>{resolution} x {gridRows}</span></span>
+                 <div className="flex items-center gap-2 bg-slate-50 p-1 rounded border border-slate-200">
+                    <Grid3X3 className="w-3 h-3 text-slate-400" />
+                    <input type="range" min="20" max="150" step="2" value={resolution} onChange={(e) => setResolution(Number(e.target.value))} className="h-1.5 flex-1 bg-slate-300 rounded-lg appearance-none cursor-pointer accent-blue-600" />
+                 </div>
+            </div>
+
+            <div className="flex flex-col w-32">
+                 <span className="text-[8px] text-slate-400 font-bold mb-0.5 flex justify-between"><span>ZOOM</span><span>{zoomLevel}%</span></span>
+                 <input type="range" min="50" max="300" step="10" value={zoomLevel} onChange={(e) => setZoomLevel(Number(e.target.value))} className="h-1.5 bg-slate-300 rounded-lg appearance-none cursor-pointer accent-blue-600"/>
+            </div>
+            
+            <div className="flex items-center gap-2">
+                <button onClick={() => setShowGridLines(!showGridLines)} className={`p-2 rounded border border-slate-200 ${showGridLines ? 'bg-blue-100 text-blue-600' : 'bg-white text-slate-400'}`}><Grid3X3 className="w-4 h-4" /></button>
+                <button onClick={() => setShowStructures(!showStructures)} className={`p-2 rounded border border-slate-200 ${!showStructures ? 'bg-amber-100 text-amber-600' : 'bg-white text-slate-400'}`}>{showStructures ? <Layers className="w-4 h-4" /> : <Ban className="w-4 h-4" />}</button>
+            </div>
           </div>
-        )}
+
+          <button onClick={async () => {
+            const next = !isPlaying;
+            setIsPlaying(next);
+            setScenario({ ...scenario, simulationStarted: next });
+            if (next) {
+              const walls: StartSimPayload['walls'] = [];
+              const sources: StartSimPayload['sources'] = [];
+              for (let y = 0; y < grid.length; y++) {
+                for (let x = 0; x < (grid[y]?.length ?? 0); x++) {
+                  if (grid[y][x] === 'wall') walls.push({ x, y, hp: 100 });
+                  else if (grid[y][x] === 'fire') sources.push({ x, y, intensity: 100 });
+                }
+              }
+              try {
+                await fireSim.startSim({
+                  map_id: 'default',
+                  width: resolution,
+                  height: gridRows,
+                  walls,
+                  sources,
+                  trucks: [],
+                });
+              } catch (err) {
+                console.error('[InstructorView] failed to start sim:', err);
+              }
+            } else {
+              try {
+                await fireSim.resetSim({ map_id: 'default' });
+              } catch (err) {
+                console.error('[InstructorView] failed to reset sim:', err);
+              }
+            }
+          }} className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-xs transition-all shadow-md border ${isPlaying ? 'bg-red-50 text-red-500 border-red-200 animate-pulse' : 'bg-green-600 text-white border-green-600 hover:bg-green-500'}`}>
+            {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />} {isPlaying ? 'АКТИВНО' : 'ЗАПУСК'}
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] bg-slate-50 p-10 flex items-start justify-center">
+            <div className="relative shadow-xl bg-white border border-slate-300 select-none transition-all duration-100 ease-out origin-top" style={{ width: `${zoomLevel}%`, aspectRatio: `${aspectRatio}`, minHeight: mapImage ? 'auto' : '500px' }} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onClick={handleMapClick}>
+              {mapImage && showMapImage && <img src={mapImage} alt="Plan" className="absolute inset-0 w-full h-full object-contain pointer-events-none opacity-60 mix-blend-multiply" />}
+              {!mapImage && showMapImage && <div className="absolute inset-0 flex items-center justify-center text-slate-300 pointer-events-none border-2 border-dashed border-slate-300"><span className="text-2xl font-black opacity-20 rotate-[-12deg] tracking-widest">НЕТ СХЕМЫ</span></div>}
+
+              <div className="absolute inset-0 z-10" style={{ display: 'grid', gridTemplateColumns: `repeat(${resolution}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)` }}>
+                {grid.map((row, y) => row.map((cell, x) => (
+                    <Cell key={`${y}-${x}`} type={cell} x={x} y={y} onMouseDown={handleMouseDown} onMouseEnter={handleMouseEnter} showStructures={showStructures} showGridLines={showGridLines} />
+                )))}
+              </div>
+
+              <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none z-20">
+                  {zones.map(zone => <ZoneRenderer zone={zone} />)}
+                  {drawingPoints.length > 0 && currentZoneTool !== 'select' && <polyline points={drawingPoints.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#2563eb" strokeWidth="2" strokeDasharray="5 5" />}
+                  {calibrationPoints.length > 0 && (
+                      <g>
+                          <line x1={calibrationPoints[0].x} y1={calibrationPoints[0].y} x2={calibrationPoints[1]?.x || calibrationPoints[0].x} y2={calibrationPoints[1]?.y || calibrationPoints[0].y} stroke="#ca8a04" strokeWidth="2" strokeDasharray="4 4" />
+                          <circle cx={calibrationPoints[0].x} cy={calibrationPoints[0].y} r="4" fill="#ca8a04" />
+                          {calibrationPoints[1] && <circle cx={calibrationPoints[1].x} cy={calibrationPoints[1].y} r="4" fill="#ca8a04" />}
+                      </g>
+                  )}
+              </svg>
+
+              {showCalibrationModal && (
+                  <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-200 p-4 rounded-xl shadow-2xl z-50 flex flex-col gap-3">
+                      <h3 className="text-sm font-bold text-slate-800 uppercase">Калибровка Масштаба</h3>
+                      <div className="flex flex-col gap-1">
+                          <label className="text-[10px] text-slate-500">Реальная длина (метры):</label>
+                          <input type="number" step="0.01" autoFocus value={realWorldDistance} onChange={e => setRealWorldDistance(e.target.value)} className="bg-slate-50 border border-slate-300 rounded px-2 py-1 text-slate-900 outline-none focus:border-blue-500" />
+                      </div>
+                      <div className="flex gap-2 justify-end mt-2">
+                          <button onClick={() => { setShowCalibrationModal(false); setCalibrationPoints([]); }} className="px-3 py-1 text-xs text-slate-500 hover:text-slate-800">Отмена</button>
+                          <button onClick={confirmCalibration} className="px-4 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold">Применить</button>
+                      </div>
+                  </div>
+              )}
+            </div>
+        </div>
+      </div>
+      
+      {/* ПРАВАЯ ПАНЕЛЬ */}
+      <div className="w-72 border-l border-slate-200 bg-white p-4 flex flex-col gap-6 overflow-y-auto z-10 shrink-0">
+        <div>
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><Settings className="w-3 h-3" /> Условия Среды</h3>
+            <div className="space-y-3 bg-slate-50 p-3 rounded border border-slate-200">
+                <div>
+                  <label className="text-[10px] text-slate-500 mb-1 flex items-center gap-1"><Thermometer className="w-3 h-3"/> Температура (°C)</label>
+                  <input type="number" step="0.1" value={scenario.temperature} onChange={e => setScenario({...scenario, temperature: Number(e.target.value)})} className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-sm text-slate-800 focus:border-blue-500 outline-none" />
+                </div>
+                <div>
+                    <label className="text-[10px] text-slate-500 mb-1 flex items-center gap-1"><Wind className="w-3 h-3"/> Ветер (м/с)</label>
+                    <input type="number" step="0.1" value={scenario.windSpeed} onChange={e => setScenario({...scenario, windSpeed: Number(e.target.value)})} className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-sm text-slate-800 focus:border-blue-500 outline-none" />
+                </div>
+                <div className="pt-2 flex justify-center">
+                    <CompassControl label="Направление" value={scenario.windDirection} onChange={(val) => setScenario({...scenario, windDirection: val})} color="blue" />
+                </div>
+            </div>
+        </div>
+        <div className="flex-1">
+           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><Zap className="w-3 h-3 text-amber-500" /> Вводные события</h3>
+           <div className="space-y-2">
+                <EventButton label="⚠️ Отказ гидранта №1" active={isPlaying} />
+                <EventButton label="⚠️ Обрушение кровли" active={isPlaying} />
+                <EventButton label="💨 Резкая смена ветра" active={isPlaying} />
+           </div>
+        </div>
       </div>
     </div>
   );
 }
 
-// --- КОМПОНЕНТЫ UI ---
-
-function ToolButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+function ToolButton({ active, onClick, icon, color, label }: any) {
   return (
-    <button onClick={onClick} className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all ${active ? 'bg-blue-600 border-blue-600 text-white shadow-md transform scale-105' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-      <div className="mb-1 transform scale-75">{icon}</div>
-      <span className="text-[10px] font-bold text-center leading-none">{label}</span>
+    <button onClick={onClick} className={`w-full aspect-square flex flex-col items-center justify-center rounded-xl transition-all duration-150 border relative group ${active ? `border-slate-300 bg-white ${color} shadow-md scale-105 z-10 ring-1 ring-blue-100` : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}>
+      <div className={`${active ? `drop-shadow-sm` : ''} transform transition-transform ${active ? 'scale-110' : 'group-hover:scale-110'}`}>{icon}</div>
+      <span className="text-[8px] font-bold mt-1.5 tracking-widest opacity-80">{label}</span>
+      {active && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-blue-500 rounded-r" />}
     </button>
   );
 }
 
-function EventButton({ label }: { label: string }) {
-  return <button className="w-full text-left px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 hover:bg-amber-50 transition-colors">{label}</button>;
+function EventButton({ label, active }: { label: string, active: boolean }) {
+    return <button disabled={!active} className={`w-full text-left px-3 py-2.5 rounded text-xs transition-all border ${active ? 'bg-white border-slate-200 text-slate-800 hover:bg-blue-50 hover:border-blue-200 cursor-pointer active:scale-95 shadow-sm' : 'bg-slate-50 border-transparent text-slate-400 cursor-not-allowed opacity-50'}`}>{label}</button>
 }
 
 function ZoneRenderer({ zone }: { zone: Zone }) {
-  const pointsStr = zone.points.map(p => `${p.x},${p.y}`).join(' ');
-
-  if (zone.type === 'fire_origin') return <circle cx={zone.points[0].x} cy={zone.points[0].y} r="8" fill="#ef4444" stroke="#fff" strokeWidth="2"><animate attributeName="r" values="8;10;8" dur="1.5s" repeatCount="indefinite" /></circle>;
-  if (zone.type === 'water_source') return <circle cx={zone.points[0].x} cy={zone.points[0].y} r="6" fill="#3b82f6" stroke="#fff" strokeWidth="2" />;
-  
-  if (zone.type === 'wall') return <polyline points={pointsStr} fill="none" stroke="#1e293b" strokeWidth="6" strokeLinecap="square" />;
-  if (zone.type === 'door') return <polyline points={pointsStr} fill="none" stroke="#78350f" strokeWidth="6" strokeDasharray="10,5" />;
-  if (zone.type === 'window') return <polyline points={pointsStr} fill="none" stroke="#0ea5e9" strokeWidth="4" />;
-  if (zone.type === 'fence') return <polyline points={pointsStr} fill="none" stroke="#334155" strokeWidth="2" strokeDasharray="4 2" />;
-  if (zone.type === 'building') return <polygon points={pointsStr} fill="rgba(203, 213, 225, 0.5)" stroke="#475569" strokeWidth="1" />;
-
-  return null;
+    const pointsStr = zone.points.map(p => `${p.x},${p.y}`).join(' ');
+    let fill = 'rgba(37, 99, 235, 0.1)'; 
+    let stroke = '#2563eb';
+    if (zone.type === 'smoke_zone') { fill = 'rgba(107, 114, 128, 0.3)'; stroke = '#6b7280'; }
+    return <polygon points={pointsStr} fill={fill} stroke={stroke} strokeWidth="1.5" />;
 }

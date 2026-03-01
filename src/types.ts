@@ -19,8 +19,8 @@ export type Zone = {
   id: string;
   type: ZoneType;
   points: Point[];
-  floor: number; // Новое поле: номер этажа
-};
+  floor: number;
+}
 
 export type ScenarioState = {
   temperature: number;
