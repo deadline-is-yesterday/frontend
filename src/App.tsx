@@ -195,8 +195,8 @@ export default function App() {
               />
             )}
             {studentRole === 'rtp' && <RTPView sharedLayout={sharedMapLayout} />}
-            {studentRole === 'squad' && <SquadView />}
-            {studentRole === 'chief' && <ChiefView simState={fireSim.simState} onShareLayout={setSharedMapLayout} />}
+            {studentRole === 'squad' && <SquadView simState={fireSim.simState} fireSim={fireSim} />}
+            {studentRole === 'chief' && <ChiefView simState={fireSim.simState} fireSim={fireSim} onShareLayout={setSharedMapLayout} />}
           </main>
           <CommunicationPanel role={studentRole} socketRef={socketRef} connected={connected} />
         </div>
@@ -239,47 +239,20 @@ export default function App() {
     <div className="flex flex-col h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       {authButton}
       <main className="flex-1 overflow-hidden relative">
-        {activeRole === 'instructor' && (
-          <InstructorView
-            scenario={scenario}
-            setScenario={setScenario}
-            zones={zones}
-            setZones={setZones}
-            stationResources={stationResources}
-            setStationResources={setStationResources}
-            targetAddress={targetAddress}
-            setTargetAddress={setTargetAddress}
-            simState={fireSim.simState}
-            fireSim={fireSim}
-            onBack={() => setScreen('lobby')}
-          />
-        )}
-        {activeRole === 'dispatcher' && (
-          <DispatcherView 
-            scenario={scenario}
-            stationResources={stationResources}
-            correctAddress={targetAddress}
-          />
-        )}
-        {activeRole === 'rtp' && <RTPView sharedLayout={sharedMapLayout} />}
-        {activeRole === 'squad' && <SquadView simState={fireSim.simState} fireSim={fireSim} />}
-        {activeRole === 'chief' && <ChiefView simState={fireSim.simState} fireSim={fireSim} onShareLayout={setSharedMapLayout} />}
+        <InstructorView
+          scenario={scenario}
+          setScenario={setScenario}
+          zones={zones}
+          setZones={setZones}
+          stationResources={stationResources}
+          setStationResources={setStationResources}
+          targetAddress={targetAddress}
+          setTargetAddress={setTargetAddress}
+          simState={fireSim.simState}
+          fireSim={fireSim}
+          onBack={() => setScreen('lobby')}
+        />
       </main>
     </div>
-  );
-}
-
-function Tab({ label, active, onClick }: { role: string; label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`px-4 py-3 text-sm font-bold whitespace-nowrap border-b-2 transition-all ${
-        active 
-          ? 'border-blue-600 text-blue-700 bg-blue-50' 
-          : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-      }`}
-    >
-      {label}
-    </button>
   );
 }
