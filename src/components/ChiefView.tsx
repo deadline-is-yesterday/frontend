@@ -10,9 +10,9 @@ interface ChiefViewProps {
 export default function ChiefView({ simState, onShareLayout }: ChiefViewProps) {
   return (
     <FireMapView
-      dataPrefix="/firemaps"
-      equipmentEndpoint="/game_logics/car"
-      hoseEndpoint="/game_logics/hose"
+      dataPrefix="/headquarters"
+      equipmentEndpoint="/hq_game_logic/car"
+      hoseEndpoint="/hq_game_logic/hose"
       simState={simState}
       onShareLayout={onShareLayout}
     />

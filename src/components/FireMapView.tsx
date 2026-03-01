@@ -236,6 +236,8 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
 
       if (mode === 'place_equipment' && pendingEquipmentId) {
         placeEquipment(pendingEquipmentId, planPos.x, planPos.y);
+        setPendingEquipmentId(null);
+        setMode('select');
         return;
       }
 
@@ -249,7 +251,6 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
         // Snap to branching input?
         const brSnap = findNearbyBranchingInput(planPos);
         if (brSnap) {
-          addWaypoint(brSnap.point, map.scale_m_per_px);
           finishHose({
             type: 'branching',
             x: brSnap.point.x,
@@ -263,7 +264,6 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
         // Snap to hydrant?
         const hydrant = findNearbyHydrant(planPos);
         if (hydrant) {
-          addWaypoint({ x: hydrant.x, y: hydrant.y }, map.scale_m_per_px);
           finishHose({ type: 'hydrant', x: hydrant.x, y: hydrant.y, hydrant_id: hydrant.id, branching_instance_id: null });
           return;
         }
@@ -295,7 +295,6 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
       e.preventDefault();
       if (mode !== 'draw_hose' || !drawingHose) return;
       const planPos = toPlanCoords(e.clientX, e.clientY);
-      addWaypoint(planPos, map?.scale_m_per_px ?? 0.05);
       finishHose({ type: 'free', x: planPos.x, y: planPos.y, hydrant_id: null, branching_instance_id: null });
     },
     [mode, drawingHose, toPlanCoords, finishHose, addWaypoint, map],

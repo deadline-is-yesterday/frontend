@@ -108,12 +108,37 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
   }, []);
 
   const moveEquipment = useCallback((instance_id: string, x: number, y: number) => {
-    setLayout(prev => ({
-      ...prev,
-      placed_equipment: prev.placed_equipment.map(e =>
-        e.instance_id === instance_id ? { ...e, x, y } : e,
-      ),
-    }));
+    setLayout(prev => {
+      const eq = prev.placed_equipment.find(e => e.instance_id === instance_id);
+      if (!eq) return prev;
+
+      const dx = x - eq.x;
+      const dy = y - eq.y;
+
+      return {
+        ...prev,
+        placed_equipment: prev.placed_equipment.map(e =>
+          e.instance_id === instance_id ? { ...e, x, y } : e,
+        ),
+        // Сдвигаем все рукава, привязанные к этой машине
+        hoses: prev.hoses.map(h => {
+          if (h.equipment_instance_id !== instance_id) return h;
+          return {
+            ...h,
+            waypoints: h.waypoints.map(wp => ({ x: wp.x + dx, y: wp.y + dy })),
+            endpoint: h.endpoint
+              ? { ...h.endpoint, x: h.endpoint.x + dx, y: h.endpoint.y + dy }
+              : null,
+          };
+        }),
+        // Сдвигаем переходники, привязанные к этой машине
+        placed_branchings: prev.placed_branchings.map(b =>
+          b.equipment_instance_id === instance_id
+            ? { ...b, x: b.x + dx, y: b.y + dy }
+            : b,
+        ),
+      };
+    });
   }, []);
 
   const deleteObject = useCallback((instance_id: string) => {
@@ -180,11 +205,13 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
     [drawingHose],
   );
 
-  /** Завершить рукав с endpoint (free / hydrant / branching). */
+  /** Завершить рукав с endpoint (free / hydrant / branching).
+   *  Конечная точка endpoint автоматически добавляется как последний waypoint. */
   const finishHose = useCallback(
     (endpoint: HoseEndpoint) => {
       if (!drawingHose) return;
       const id = crypto.randomUUID();
+      const finalWaypoints = [...drawingHose.waypoints, { x: endpoint.x, y: endpoint.y }];
       setLayout(prev => ({
         ...prev,
         hoses: [
@@ -193,7 +220,7 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
             id,
             equipment_instance_id: drawingHose.equipment_instance_id,
             hose_id: drawingHose.hose_id,
-            waypoints: drawingHose.waypoints,
+            waypoints: finalWaypoints,
             endpoint,
           },
         ],
@@ -368,11 +395,17 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
     });
   }, []);
 
-  /** Отправить PUT на бэк после перемещения техники. */
+  /** Отправить PUT на бэк после перемещения техники (+ все привязанные рукава). */
   const syncEquipment = useCallback((instance_id: string) => {
     setLayout(prev => {
       const eq = prev.placed_equipment.find(e => e.instance_id === instance_id);
       if (eq) syncEquipmentEndpoint(eqApi.current, 'PUT', instance_id, { x: eq.x, y: eq.y });
+      // Синхронизируем все рукава, привязанные к этой машине
+      prev.hoses
+        .filter(h => h.equipment_instance_id === instance_id)
+        .forEach(h => {
+          if (h.endpoint) syncHoseEndpoint(hoseApi.current, 'PUT', h.id, { x: h.endpoint.x, y: h.endpoint.y });
+        });
       return prev;
     });
   }, []);
