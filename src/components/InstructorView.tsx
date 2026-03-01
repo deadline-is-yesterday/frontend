@@ -43,23 +43,12 @@ const DIFFICULTY_OPTIONS: { value: CallerDifficulty; label: string; desc: string
   { value: 'level5', label: 'Уровень 5: Хаос', desc: 'Неадекват, шок, полная дезориентация.' },
 ];
 
-export type VehicleType = {
+export type VehicleType_Legacy = {
   id: string;
   name: string;
   capacity: number;
   type: 'AC' | 'AL' | 'ASA' | 'ASH';
 };
-
-export const AVAILABLE_VEHICLES: VehicleType[] = [
-  { id: 'ac40_130', name: 'АЦ-40 (130) 63Б', capacity: 2.35, type: 'AC' },
-  { id: 'ac40_131', name: 'АЦ-40 (131) 137А', capacity: 2.4, type: 'AC' },
-  { id: 'ac32_43253', name: 'АЦ-3,2-40 (43253)', capacity: 3.2, type: 'AC' },
-  { id: 'ac50_43118', name: 'АЦ-5,0-40 (43118)', capacity: 5.0, type: 'AC' },
-  { id: 'ac60_5557', name: 'АЦ-6,0-40 (Урал-5557)', capacity: 6.0, type: 'AC' },
-  { id: 'al_30', name: 'АЛ-30 (Автолестница)', capacity: 0, type: 'AL' },
-  { id: 'asa_20', name: 'АСА-20 (Спасательный)', capacity: 0, type: 'ASA' },
-  { id: 'ash_uaz', name: 'АШ (Штабной УАЗ)', capacity: 0, type: 'ASH' },
-];
 
 type CellType = 'empty' | 'wall' | 'fire' | 'water' | 'door' | 'window';
 type HydrantPoint = { id: string; xPct: number; yPct: number };
@@ -173,13 +162,19 @@ export default function InstructorView({
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      const [gridData, scenarioData, vehicleTypesData, planUrl] = await Promise.all([
+      const [gridData, scenarioData, vehicleTypesData, planUrl, status] = await Promise.all([
         game.loadGrid(),
         game.loadScenario(),
         game.loadVehicleTypes(),
         game.loadPlan(),
+        game.getStatus(),
       ]);
       if (cancelled) return;
+      // Синхронизируем isPlaying с is_running из БД
+      if (status.is_running) {
+        setIsPlaying(true);
+        setScenario({ ...scenario, simulationStarted: true });
+      }
       if (planUrl) {
         setMapImage(planUrl);
       }
@@ -728,6 +723,12 @@ export default function InstructorView({
             const next = !isPlaying;
             setIsPlaying(next);
             setScenario({ ...scenario, simulationStarted: next });
+            // Обновляем is_running в БД
+            fetch(`${API_BASE}/game/status`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ is_running: next }),
+            }).catch(() => {});
             if (next) {
               const walls: Array<{ x: number; y: number; hp: number }> = [];
               const sources: Array<{ x: number; y: number; intensity: number }> = [];

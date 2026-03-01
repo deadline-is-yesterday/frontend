@@ -48,6 +48,16 @@ export interface GameInfo {
   status: string;
 }
 
+export interface RoleInfo {
+  role: string;
+  occupied: boolean;
+}
+
+export interface RolesResponse {
+  running: boolean;
+  roles: RoleInfo[];
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useGame() {
@@ -173,6 +183,54 @@ export function useGame() {
     }).catch(() => {});
   }, []);
 
+  // ── Auth ────────────────────────────────────────────────────────────────
+
+  const login = useCallback(async (password: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/game/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // ── Roles ───────────────────────────────────────────────────────────────
+
+  const getRoles = useCallback(async (): Promise<RolesResponse> => {
+    try {
+      const res = await fetch(`${API_BASE}/game/roles`);
+      if (!res.ok) return { running: false, roles: [] };
+      return res.json();
+    } catch {
+      return { running: false, roles: [] };
+    }
+  }, []);
+
+  const joinRole = useCallback(async (role: string, sid: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/game/roles/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, sid }),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const leaveRole = useCallback(async (role: string): Promise<void> => {
+    fetch(`${API_BASE}/game/roles/leave`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    }).catch(() => {});
+  }, []);
+
   return {
     createGame,
     listGames,
@@ -186,5 +244,9 @@ export function useGame() {
     saveScenario,
     loadDepot,
     saveDepot,
+    login,
+    getRoles,
+    joinRole,
+    leaveRole,
   };
 }
