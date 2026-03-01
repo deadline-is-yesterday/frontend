@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Truck, PhoneCall, Radio, PhoneOff, Mic, Navigation, MapPin, CheckCircle2, AlertTriangle } from 'lucide-react';
-import { YMaps, Map, Placemark } from '@pbe/react-yandex-maps';
+import { useYandexMap, type MapMarker } from '../hooks/useYandexMap';
 import { ScenarioState } from '../types';
 import { useGame, type VehicleType } from '../hooks/useGame';
 
@@ -29,10 +29,30 @@ export default function DispatcherView({ scenario, stationResources, correctAddr
   useEffect(() => { game.loadVehicleTypes().then(setVehicleTypes); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mapPoints = React.useMemo(() => {
-      // Добавляем правильный адрес только если симуляция запущена, для теста
       const correctPoint = { coords: [43.4060, 39.9560], label: correctAddress || "Неизвестный адрес" };
       return [...BASE_FAKE_ADDRESSES, correctPoint].sort(() => Math.random() - 0.5);
   }, [correctAddress]);
+
+  const mapMarkers: MapMarker[] = React.useMemo(() => {
+      if (!scenario.simulationStarted) return [];
+      return mapPoints.map(p => ({
+          coords: p.coords,
+          label: p.label,
+          selected: selectedAddress === p.label,
+      }));
+  }, [scenario.simulationStarted, mapPoints, selectedAddress]);
+
+  const handleMarkerClick = React.useCallback((label: string) => {
+      if (!isCalculated) setSelectedAddress(label);
+  }, [isCalculated]);
+
+  const { containerRef: mapContainerRef } = useYandexMap({
+      apikey: import.meta.env.VITE_YANDEX_MAPS_KEY || '',
+      center: [43.4056, 39.9550],
+      zoom: 14,
+      markers: mapMarkers,
+      onMarkerClick: handleMarkerClick,
+  });
 
   useEffect(() => {
     // Симуляция звонка через 3 секунды после старта
@@ -154,19 +174,7 @@ export default function DispatcherView({ scenario, stationResources, correctAddr
       {/* ЦЕНТРАЛЬНАЯ ЧАСТЬ: КАРТА И РАСЧЕТ */}
       <div className="flex-1 flex flex-col relative bg-white">
         <div className="flex-1 relative border-b border-slate-200">
-             <YMaps query={{ theme: 'light', lang: 'ru_RU' }}>
-                <Map defaultState={{ center: [43.4056, 39.9550], zoom: 14, controls: ['zoomControl'] }} width="100%" height="100%">
-                    {scenario.simulationStarted && mapPoints.map((addr, idx) => (
-                        <Placemark 
-                            key={idx}
-                            geometry={addr.coords}
-                            options={{ preset: selectedAddress === addr.label ? 'islands#redDotIcon' : 'islands#blueIcon', iconColor: selectedAddress === addr.label ? '#ef4444' : '#3b82f6' }} 
-                            properties={{ iconCaption: '?' }}
-                            onClick={() => !isCalculated && setSelectedAddress(addr.label)}
-                        />
-                    ))}
-                </Map>
-            </YMaps>
+             <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
             
             {selectedAddress && (
                 <div className="absolute top-4 left-4 bg-white/90 p-4 rounded-xl border border-slate-200 backdrop-blur shadow-xl z-10">
