@@ -1,31 +1,44 @@
 import { useState, useCallback, useRef } from 'react';
-import type { MapLayout, EditorMode, Point, DrawingHose, HoseEndpoint } from '../../types/firemap';
+import type { MapLayout, EditorMode, Point, DrawingHose, HoseEndpoint, PlacedHoseEnd } from '../../types/firemap';
 
 const EMPTY_LAYOUT: MapLayout = {
   placed_equipment: [],
   placed_branchings: [],
   hoses: [],
+  hose_ends: [],
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
+const DEFAULT_HOSE_END_SPREAD_DEG = 50;
 
-/** Fire-and-forget запрос к бэку для конца рукава. */
-function syncHoseEndpoint(
+/** Fire-and-forget запрос к бэку для рукава (только позиция). */
+function syncHoseToBackend(
   apiPath: string,
   method: 'POST' | 'PUT' | 'DELETE',
   id: string,
-  endpoint?: { x: number; y: number },
+  pos?: { x: number; y: number },
+) {
+  if (!apiPath) return;
+  fetch(`${API_BASE}${apiPath}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, x: pos?.x ?? 0, y: pos?.y ?? 0 }),
+  }).catch(() => {});
+}
+
+/** Fire-and-forget запрос к бэку для конца рукава. */
+function syncHoseEndToBackend(
+  apiPath: string,
+  method: 'POST' | 'PUT' | 'DELETE',
+  data: Partial<PlacedHoseEnd> & { id: string },
 ) {
   if (!apiPath) return;
   fetch(`${API_BASE}${apiPath}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      id,
-      x: endpoint?.x ?? 0,
-      y: endpoint?.y ?? 0,
-      angle: 0,
-      enabled: true,
+      ...data,
+      active: data.active ? 1 : 0,
     }),
   }).catch(() => {});
 }
@@ -69,16 +82,20 @@ function distToSegment(p: Point, a: Point, b: Point): number {
 }
 
 export interface FireMapStateOptions {
-  /** Путь API для синхронизации рукавов (пустая строка = без синхронизации). */
+  /** Путь API для синхронизации рукавов, напр. '/hq_game_logic/hose'. */
   hoseEndpoint?: string;
-  /** Путь API для синхронизации техники (пустая строка = без синхронизации). */
+  /** Путь API для синхронизации концов рукавов, напр. '/hq_game_logic/hose_end'. */
+  hoseEndEndpoint?: string;
+  /** Путь API для синхронизации техники, напр. '/hq_game_logic/car'. */
   equipmentEndpoint?: string;
 }
 
 export function useFireMapState(opts: FireMapStateOptions = {}) {
   const hoseApi = useRef(opts.hoseEndpoint ?? '');
+  const hoseEndApi = useRef(opts.hoseEndEndpoint ?? '');
   const eqApi = useRef(opts.equipmentEndpoint ?? '');
   hoseApi.current = opts.hoseEndpoint ?? '';
+  hoseEndApi.current = opts.hoseEndEndpoint ?? '';
   eqApi.current = opts.equipmentEndpoint ?? '';
 
   const [layout, setLayout] = useState<MapLayout>(EMPTY_LAYOUT);
@@ -93,7 +110,13 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
 
   /** Загрузить сохранённую расстановку. */
   const loadLayout = useCallback((saved: MapLayout) => {
-    setLayout(saved);
+    setLayout({
+      ...saved,
+      hose_ends: (saved.hose_ends ?? []).map(he => ({
+        ...he,
+        spread_deg: he.spread_deg ?? DEFAULT_HOSE_END_SPREAD_DEG,
+      })),
+    });
     setSelectedId(null);
     setMode('select');
   }, []);
@@ -112,15 +135,23 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
       const eq = prev.placed_equipment.find(e => e.instance_id === instance_id);
       if (!eq) return prev;
 
+      // Запрещаем движение машины, если у неё уже развернут хотя бы один рукав.
+      const hasDeployedHoses = prev.hoses.some(h => h.equipment_instance_id === instance_id);
+      if (hasDeployedHoses) return prev;
+
       const dx = x - eq.x;
       const dy = y - eq.y;
+
+      // Собираем id рукавов этой машины для сдвига hose_ends
+      const eqHoseIds = new Set(
+        prev.hoses.filter(h => h.equipment_instance_id === instance_id).map(h => h.id),
+      );
 
       return {
         ...prev,
         placed_equipment: prev.placed_equipment.map(e =>
           e.instance_id === instance_id ? { ...e, x, y } : e,
         ),
-        // Сдвигаем все рукава, привязанные к этой машине
         hoses: prev.hoses.map(h => {
           if (h.equipment_instance_id !== instance_id) return h;
           return {
@@ -131,11 +162,23 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
               : null,
           };
         }),
-        // Сдвигаем переходники, привязанные к этой машине
         placed_branchings: prev.placed_branchings.map(b =>
           b.equipment_instance_id === instance_id
             ? { ...b, x: b.x + dx, y: b.y + dy }
             : b,
+        ),
+        // Сдвигаем концы рукавов этой машины
+        hose_ends: prev.hose_ends.map(he =>
+          eqHoseIds.has(he.placed_hose_id)
+            ? {
+                ...he,
+                x: he.x + dx,
+                y: he.y + dy,
+                // Если конец был подключён к гидранту, при движении машины считаем
+                // подключение сорванным и выключаем подачу.
+                active: he.hydrant_id ? false : he.active,
+              }
+            : he,
         ),
       };
     });
@@ -143,18 +186,24 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
 
   const deleteObject = useCallback((instance_id: string) => {
     setLayout(prev => {
-      // Определяем, что удаляем: технику или рукав
       const isEquipment = prev.placed_equipment.some(e => e.instance_id === instance_id);
       const isHose = prev.hoses.some(h => h.id === instance_id);
 
       if (isEquipment) {
         syncEquipmentEndpoint(eqApi.current, 'DELETE', instance_id);
-        // Удаляем рукава, привязанные к этой технике
         prev.hoses
           .filter(h => h.equipment_instance_id === instance_id)
-          .forEach(h => syncHoseEndpoint(hoseApi.current, 'DELETE', h.id));
+          .forEach(h => syncHoseToBackend(hoseApi.current, 'DELETE', h.id));
+        // Концы рукавов удаляются автоматически на бэке при удалении рукава
       }
-      if (isHose) syncHoseEndpoint(hoseApi.current, 'DELETE', instance_id);
+      if (isHose) syncHoseToBackend(hoseApi.current, 'DELETE', instance_id);
+
+      // Собираем id удаляемых рукавов для очистки hose_ends
+      const deletedHoseIds = new Set(
+        isEquipment
+          ? prev.hoses.filter(h => h.equipment_instance_id === instance_id).map(h => h.id)
+          : isHose ? [instance_id] : [],
+      );
 
       return {
         ...prev,
@@ -163,6 +212,7 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
           b => b.instance_id !== instance_id && b.equipment_instance_id !== instance_id,
         ),
         hoses: prev.hoses.filter(h => h.id !== instance_id && h.equipment_instance_id !== instance_id),
+        hose_ends: prev.hose_ends.filter(he => !deletedHoseIds.has(he.placed_hose_id)),
       };
     });
     setSelectedId(id => (id === instance_id ? null : id));
@@ -206,26 +256,47 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
   );
 
   /** Завершить рукав с endpoint (free / hydrant / branching).
-   *  Конечная точка endpoint автоматически добавляется как последний waypoint. */
+   *  Конечная точка endpoint автоматически добавляется как последний waypoint.
+   *  Автоматически создаёт конец рукава (hose_end). */
   const finishHose = useCallback(
     (endpoint: HoseEndpoint) => {
       if (!drawingHose) return;
-      const id = crypto.randomUUID();
+      const hoseId = crypto.randomUUID();
+      const hoseEndId = crypto.randomUUID();
       const finalWaypoints = [...drawingHose.waypoints, { x: endpoint.x, y: endpoint.y }];
+
+      const newHoseEnd: PlacedHoseEnd = {
+        id: hoseEndId,
+        placed_hose_id: hoseId,
+        x: endpoint.x,
+        y: endpoint.y,
+        angle: 0,
+        spread_deg: DEFAULT_HOSE_END_SPREAD_DEG,
+        active: false,
+        hydrant_id: endpoint.hydrant_id,
+        vehicle_id: null,
+      };
+
       setLayout(prev => ({
         ...prev,
         hoses: [
           ...prev.hoses,
           {
-            id,
+            id: hoseId,
             equipment_instance_id: drawingHose.equipment_instance_id,
             hose_id: drawingHose.hose_id,
             waypoints: finalWaypoints,
             endpoint,
           },
         ],
+        hose_ends: [...prev.hose_ends, newHoseEnd],
       }));
-      syncHoseEndpoint(hoseApi.current, 'POST', id, { x: endpoint.x, y: endpoint.y });
+
+      // Синхронизируем рукав (только позиция)
+      syncHoseToBackend(hoseApi.current, 'POST', hoseId, { x: endpoint.x, y: endpoint.y });
+      // Синхронизируем конец рукава
+      syncHoseEndToBackend(hoseEndApi.current, 'POST', newHoseEnd);
+
       setDrawingHose(null);
       setMode('select');
     },
@@ -275,7 +346,6 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
   const moveWaypoint = useCallback(
     (hose_id: string, waypointIndex: number, point: Point) => {
       setLayout(prev => {
-        // Сохраняем снэпшот при первом перемещении
         if (!hoseSnapshotRef.current || hoseSnapshotRef.current.hoseId !== hose_id) {
           const hose = prev.hoses.find(h => h.id === hose_id);
           if (hose) {
@@ -296,10 +366,7 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
     [],
   );
 
-  /**
-   * Откатить рукав к снэпшоту, если его длина превышает лимит.
-   * Вызывается при снятии выделения.
-   */
+  /** Откатить рукав к снэпшоту, если его длина превышает лимит. */
   const revertHoseIfOverLimit = useCallback(
     (maxLengthM: number, scale_m_per_px: number) => {
       const snap = hoseSnapshotRef.current;
@@ -309,7 +376,6 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
         if (!hose) return prev;
         const lenM = polylineLength(hose.waypoints) * scale_m_per_px;
         if (lenM > maxLengthM) {
-          // Откатываем
           return {
             ...prev,
             hoses: prev.hoses.map(h =>
@@ -326,10 +392,12 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
 
   /** Удалить конкретный рукав по id. */
   const deleteHose = useCallback((hose_id: string) => {
-    syncHoseEndpoint(hoseApi.current, 'DELETE', hose_id);
+    syncHoseToBackend(hoseApi.current, 'DELETE', hose_id);
+    // Концы рукава удаляются автоматически на бэке
     setLayout(prev => ({
       ...prev,
       hoses: prev.hoses.filter(h => h.id !== hose_id),
+      hose_ends: prev.hose_ends.filter(he => he.placed_hose_id !== hose_id),
     }));
     setSelectedId(id => (id === hose_id ? null : id));
   }, []);
@@ -357,9 +425,10 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
             return { ...h, waypoints: newWp };
           }),
         };
-        // Синхронизируем с бэком
         const hose = updated.hoses.find(h => h.id === hose_id);
-        if (hose) syncHoseEndpoint(hoseApi.current, 'PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+        if (hose?.endpoint) {
+          syncHoseToBackend(hoseApi.current, 'PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+        }
         return updated;
       });
     },
@@ -379,33 +448,98 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
           }),
         };
         const hose = updated.hoses.find(h => h.id === hose_id);
-        if (hose) syncHoseEndpoint(hoseApi.current, 'PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+        if (hose?.endpoint) {
+          syncHoseToBackend(hoseApi.current, 'PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+        }
         return updated;
       });
     },
     [],
   );
 
-  /** Отправить PUT на бэк для конца рукава (вызывать после завершения редактирования). */
+  /** Отправить PUT на бэк для рукава (вызывать после завершения редактирования). */
   const syncHose = useCallback((hose_id: string) => {
     setLayout(prev => {
       const hose = prev.hoses.find(h => h.id === hose_id);
-      if (hose) syncHoseEndpoint(hoseApi.current, 'PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
-      return prev; // не меняем state
+      if (hose?.endpoint) {
+        syncHoseToBackend(hoseApi.current, 'PUT', hose_id, { x: hose.endpoint.x, y: hose.endpoint.y });
+      }
+      return prev;
     });
   }, []);
 
-  /** Отправить PUT на бэк после перемещения техники (+ все привязанные рукава). */
+  /** Отправить PUT на бэк после перемещения техники (+ все привязанные рукава и их концы). */
   const syncEquipment = useCallback((instance_id: string) => {
     setLayout(prev => {
       const eq = prev.placed_equipment.find(e => e.instance_id === instance_id);
       if (eq) syncEquipmentEndpoint(eqApi.current, 'PUT', instance_id, { x: eq.x, y: eq.y });
-      // Синхронизируем все рукава, привязанные к этой машине
+
+      const eqHoseIds = new Set(
+        prev.hoses.filter(h => h.equipment_instance_id === instance_id).map(h => h.id),
+      );
+      // Синхронизируем рукава
       prev.hoses
         .filter(h => h.equipment_instance_id === instance_id)
         .forEach(h => {
-          if (h.endpoint) syncHoseEndpoint(hoseApi.current, 'PUT', h.id, { x: h.endpoint.x, y: h.endpoint.y });
+          if (h.endpoint) syncHoseToBackend(hoseApi.current, 'PUT', h.id, { x: h.endpoint.x, y: h.endpoint.y });
         });
+      // Синхронизируем концы рукавов
+      prev.hose_ends
+        .filter(he => eqHoseIds.has(he.placed_hose_id))
+        .forEach(he => {
+          syncHoseEndToBackend(hoseEndApi.current, 'PUT', he);
+        });
+
+      return prev;
+    });
+  }, []);
+
+  // ===================== Операции с концами рукавов =====================
+
+  /** Переключить active (вкл/выкл) конца рукава. */
+  const toggleHoseEndActive = useCallback((hose_end_id: string) => {
+    setLayout(prev => {
+      const updated: MapLayout = {
+        ...prev,
+        hose_ends: prev.hose_ends.map(he => {
+          if (he.id !== hose_end_id) return he;
+          return { ...he, active: !he.active };
+        }),
+      };
+      const he = updated.hose_ends.find(h => h.id === hose_end_id);
+      if (he) syncHoseEndToBackend(hoseEndApi.current, 'PUT', he);
+      return updated;
+    });
+  }, []);
+
+  /** Установить угол полива конца рукава (без синхронизации). */
+  const setHoseEndAngle = useCallback((hose_end_id: string, angle: number) => {
+    setLayout(prev => ({
+      ...prev,
+      hose_ends: prev.hose_ends.map(he => {
+        if (he.id !== hose_end_id) return he;
+        return { ...he, angle };
+      }),
+    }));
+  }, []);
+
+  /** Установить угол разброса воды конца рукава (без синхронизации). */
+  const setHoseEndSpread = useCallback((hose_end_id: string, spreadDeg: number) => {
+    const nextSpread = Math.max(10, Math.min(140, Math.round(spreadDeg)));
+    setLayout(prev => ({
+      ...prev,
+      hose_ends: prev.hose_ends.map(he => {
+        if (he.id !== hose_end_id) return he;
+        return { ...he, spread_deg: nextSpread };
+      }),
+    }));
+  }, []);
+
+  /** Синхронизировать конец рукава с бэком (вызывать после drag-end). */
+  const syncHoseEnd = useCallback((hose_end_id: string) => {
+    setLayout(prev => {
+      const he = prev.hose_ends.find(h => h.id === hose_end_id);
+      if (he) syncHoseEndToBackend(hoseEndApi.current, 'PUT', he);
       return prev;
     });
   }, []);
@@ -435,5 +569,9 @@ export function useFireMapState(opts: FireMapStateOptions = {}) {
     deleteHose,
     syncHose,
     syncEquipment,
+    toggleHoseEndActive,
+    setHoseEndAngle,
+    setHoseEndSpread,
+    syncHoseEnd,
   };
 }
