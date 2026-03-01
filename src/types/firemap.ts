@@ -53,6 +53,7 @@ export type PlacedBranching = {
   y: number;
 };
 
+/** Метаданные конца рукавной линии (куда подключён). */
 export type HoseEndpoint = {
   type: 'free' | 'hydrant' | 'branching';
   x: number;
@@ -69,10 +70,25 @@ export type PlacedHose = {
   endpoint: HoseEndpoint | null;
 };
 
+/** Конец рукава — отдельная сущность с состоянием (вкл/выкл, угол полива). */
+export type PlacedHoseEnd = {
+  id: string;
+  placed_hose_id: string;
+  x: number;
+  y: number;
+  angle: number;
+  /** Полный угол конуса полива в градусах. */
+  spread_deg?: number;
+  active: boolean;
+  hydrant_id: string | null;
+  vehicle_id: string | null;
+};
+
 export type MapLayout = {
   placed_equipment: PlacedEquipment[];
   placed_branchings: PlacedBranching[];
   hoses: PlacedHose[];
+  hose_ends: PlacedHoseEnd[];
 };
 
 export type EditorMode =

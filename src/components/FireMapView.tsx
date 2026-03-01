@@ -11,6 +11,7 @@ import type { EditorMode, EquipmentSpec, FireMap, HoseSpec, MapLayout } from '..
 import type { FireSimState } from '../types/firesim';
 import { iconUrl } from './firemap/iconUrl';
 import FireGridLayer from './firemap/FireGridLayer';
+import CompassControl from './CompassControl';
 
 interface FireMapViewProps {
   /** Префикс для загрузки данных (maps/equipment/layout), по умолчанию '/firemap' */
@@ -19,6 +20,8 @@ interface FireMapViewProps {
   equipmentEndpoint?: string;
   /** Эндпоинт синхронизации рукавов (POST/PUT/DELETE), напр. '/game_logic/hose' */
   hoseEndpoint?: string;
+  /** Эндпоинт синхронизации концов рукавов, напр. '/hq_game_logic/hose_end' */
+  hoseEndEndpoint?: string;
   simState?: FireSimState | null;
   /** Режим только для чтения — скрывает тулбар и панель техники */
   readOnly?: boolean;
@@ -36,7 +39,7 @@ function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
 
-export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoint, simState, readOnly, onShareLayout, initialLayout }: FireMapViewProps) {
+export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoint, hoseEndEndpoint, simState, readOnly, onShareLayout, initialLayout }: FireMapViewProps) {
   const { map, equipment, savedLayout, loading } = useFireMapData(dataPrefix);
   const {
     layout,
@@ -63,7 +66,11 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
     deleteBranching,
     syncHose,
     syncEquipment,
-  } = useFireMapState({ hoseEndpoint, equipmentEndpoint });
+    toggleHoseEndActive,
+    setHoseEndAngle,
+    setHoseEndSpread,
+    syncHoseEnd,
+  } = useFireMapState({ hoseEndpoint, hoseEndEndpoint, equipmentEndpoint });
 
   // Zoom & pan
   const [zoom, setZoom] = useState(1);
@@ -96,6 +103,7 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
       placed_equipment: merged,
       placed_branchings: savedLayout?.placed_branchings ?? [],
       hoses: savedLayout?.hoses ?? [],
+      hose_ends: savedLayout?.hose_ends ?? [],
     });
   }, [savedLayout, equipment, loadLayout]);
 
@@ -257,6 +265,8 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
             y: brSnap.point.y,
             hydrant_id: null,
             branching_instance_id: brSnap.branching.instance_id,
+            active: false,
+            angle: 0,
           });
           return;
         }
@@ -264,7 +274,7 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
         // Snap to hydrant?
         const hydrant = findNearbyHydrant(planPos);
         if (hydrant) {
-          finishHose({ type: 'hydrant', x: hydrant.x, y: hydrant.y, hydrant_id: hydrant.id, branching_instance_id: null });
+          finishHose({ type: 'hydrant', x: hydrant.x, y: hydrant.y, hydrant_id: hydrant.id, branching_instance_id: null, active: false, angle: 0 });
           return;
         }
 
@@ -295,7 +305,7 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
       e.preventDefault();
       if (mode !== 'draw_hose' || !drawingHose) return;
       const planPos = toPlanCoords(e.clientX, e.clientY);
-      finishHose({ type: 'free', x: planPos.x, y: planPos.y, hydrant_id: null, branching_instance_id: null });
+      finishHose({ type: 'free', x: planPos.x, y: planPos.y, hydrant_id: null, branching_instance_id: null, active: false, angle: 0 });
     },
     [mode, drawingHose, toPlanCoords, finishHose, addWaypoint, map],
   );
@@ -353,8 +363,11 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
   );
 
   const handleDeleteSelected = useCallback(() => {
-    if (selectedId) deleteObject(selectedId);
-  }, [selectedId, deleteObject]);
+    if (!selectedId) return;
+    const selectedIsHoseEnd = layout.hose_ends.some(he => he.id === selectedId);
+    if (selectedIsHoseEnd) return;
+    deleteObject(selectedId);
+  }, [selectedId, layout.hose_ends, deleteObject]);
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -378,6 +391,16 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
           layout.placed_equipment.find(e => e.instance_id === selectedId)?.instance_id,
       )
     : null;
+  const selectedHoseEnd = selectedId
+    ? layout.hose_ends.find(he => he.id === selectedId) ?? null
+    : null;
+  const selectedHose = selectedHoseEnd
+    ? layout.hoses.find(h => h.id === selectedHoseEnd.placed_hose_id) ?? null
+    : null;
+  const selectedHydrant = selectedHoseEnd?.hydrant_id && map
+    ? map.hydrants.find(h => h.id === selectedHoseEnd.hydrant_id) ?? null
+    : null;
+  const hasDeletableSelection = !!selectedId && !selectedHoseEnd;
 
   if (loading) {
     return (
@@ -408,7 +431,7 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
           mode={mode}
           zoom={zoom}
           isSaving={isSaving}
-          hasSelection={!!selectedId}
+          hasSelection={hasDeletableSelection}
           onMode={handleToolbarMode}
           onDelete={handleDeleteSelected}
           onSave={handleSave}
@@ -459,8 +482,10 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
               )}
 
               {/* Слои */}
+              {map && <HydrantLayer hydrants={map.hydrants} zoom={zoom} hoseEnds={layout.hose_ends} />}
               <HoseLayer
                 hoses={layout.hoses}
+                hoseEnds={layout.hose_ends}
                 selectedId={selectedId}
                 zoom={zoom}
                 scale_m_per_px={map?.scale_m_per_px ?? 0.05}
@@ -483,8 +508,13 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
                 })()}
                 onInsertWaypoint={insertWaypoint}
                 onRemoveWaypoint={removeWaypoint}
+                onSelectHoseEnd={id => {
+                  setSelectedId(id);
+                  setMode('select');
+                }}
+                onSetHoseEndAngle={setHoseEndAngle}
+                onHoseEndAngleDragEnd={syncHoseEnd}
               />
-              {map && <HydrantLayer hydrants={map.hydrants} zoom={zoom} />}
               <EquipmentLayer
                 placedEquipment={layout.placed_equipment}
                 equipmentSpecs={equipment}
@@ -537,7 +567,18 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
         </div>
 
         {/* Правая панель — свойства выбранного объекта */}
-        {selectedSpec && selectedId && (
+        {selectedHoseEnd && (
+          <HoseEndPropertiesPanel
+            hoseEnd={selectedHoseEnd}
+            hose={selectedHose}
+            hydrantLabel={selectedHydrant?.label ?? null}
+            onToggleActive={() => toggleHoseEndActive(selectedHoseEnd.id)}
+            onSetAngle={(angle) => setHoseEndAngle(selectedHoseEnd.id, angle)}
+            onSetSpread={(spread) => setHoseEndSpread(selectedHoseEnd.id, spread)}
+            onAngleCommit={() => syncHoseEnd(selectedHoseEnd.id)}
+          />
+        )}
+        {!selectedHoseEnd && selectedSpec && selectedId && (
           <PropertiesPanel
             spec={selectedSpec}
             instanceId={selectedId}
@@ -787,6 +828,95 @@ function PropertiesPanel({
           <Trash2 className="w-3 h-3" />
           Удалить объект
         </button>
+      </div>
+    </div>
+  );
+}
+
+function HoseEndPropertiesPanel({
+  hoseEnd,
+  hose,
+  hydrantLabel,
+  onToggleActive,
+  onSetAngle,
+  onSetSpread,
+  onAngleCommit,
+}: {
+  hoseEnd: MapLayout['hose_ends'][number];
+  hose: MapLayout['hoses'][number] | null;
+  hydrantLabel: string | null;
+  onToggleActive: () => void;
+  onSetAngle: (angle: number) => void;
+  onSetSpread: (spread: number) => void;
+  onAngleCommit: () => void;
+}) {
+  const isHydrant = !!hoseEnd.hydrant_id;
+  const endpointTitle = isHydrant ? 'Гидрант' : 'Свободный конец';
+  const hoseTitle = hose ? `${hose.hose_id}` : 'Неизвестный рукав';
+  const spread = Math.max(10, Math.min(140, Math.round(hoseEnd.spread_deg ?? 50)));
+
+  return (
+    <div className="w-56 bg-white border-l border-slate-200 flex flex-col overflow-y-auto">
+      <div className="px-3 py-2 border-b border-slate-200">
+        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+          Свойства конца
+        </span>
+      </div>
+      <div className="p-3 flex flex-col gap-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-800">{endpointTitle}</div>
+          <div className="text-xs text-slate-400 mt-0.5 font-mono break-all">{hoseEnd.id.slice(0, 8)}…</div>
+        </div>
+
+        <div className="text-xs text-slate-700">
+          <div className="flex justify-between">
+            <span className="text-slate-500">Рукав</span>
+            <span>{hoseTitle}</span>
+          </div>
+          {hydrantLabel && (
+            <div className="flex justify-between mt-1">
+              <span className="text-slate-500">Гидрант</span>
+              <span>{hydrantLabel}</span>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={onToggleActive}
+          className={`w-full px-2 py-1.5 rounded text-xs font-medium border transition-colors ${
+            hoseEnd.active
+              ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+          }`}
+        >
+          {hoseEnd.active ? 'Выключить конец' : 'Включить конец'}
+        </button>
+
+        {!isHydrant && (
+          <div className="flex flex-col gap-3">
+            <CompassControl
+              value={Math.round(hoseEnd.angle)}
+              onChange={(value) => {
+                onSetAngle(value);
+                onAngleCommit();
+              }}
+              label="Угол полива"
+              color="blue"
+            />
+            <label className="text-xs text-slate-700 flex flex-col gap-1">
+              Угол разброса: {spread}°
+              <input
+                type="range"
+                min={10}
+                max={140}
+                value={spread}
+                onChange={(e) => onSetSpread(Number(e.target.value))}
+                onMouseUp={onAngleCommit}
+                onTouchEnd={onAngleCommit}
+              />
+            </label>
+          </div>
+        )}
       </div>
     </div>
   );
