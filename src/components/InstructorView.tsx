@@ -8,8 +8,7 @@ import {
   Droplets
 } from 'lucide-react';
 import { ScenarioState, Zone, ZoneType, Point } from '../types';
-import type { UseFireSimReturn } from '../hooks/useFireSim';
-import type { StartSimPayload } from '../types/firesim';
+import { useLocalFireSim } from '../hooks/useLocalFireSim';
 import CompassControl from './CompassControl';
 
 // --- ТИПЫ ТЕХНИКИ ---
@@ -43,7 +42,6 @@ interface InstructorViewProps {
   targetAddress: string;
   setTargetAddress: (addr: string) => void;
   setMapScale?: (scale: number) => void;
-  fireSim: UseFireSimReturn;
 }
 
 // Компонент клетки
@@ -84,7 +82,7 @@ export default function InstructorView({
     scenario, setScenario, zones, setZones,
     stationResources, setStationResources,
     targetAddress, setTargetAddress,
-    setMapScale, fireSim
+    setMapScale
 }: InstructorViewProps) {
   
   const [activeTab, setActiveTab] = useState<'map' | 'resources'>('map');
@@ -105,6 +103,7 @@ export default function InstructorView({
   const [selectedTool, setSelectedTool] = useState<CellType | 'ruler' | null>('wall');
   const [isDrawing, setIsDrawing] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const localSim = useLocalFireSim();
   const [showGridLines, setShowGridLines] = useState(true);
   const [showMapImage, setShowMapImage] = useState(true);
   const [showStructures, setShowStructures] = useState(true);
@@ -475,37 +474,22 @@ export default function InstructorView({
             </div>
           </div>
 
-          <button onClick={async () => {
+          <button onClick={() => {
             const next = !isPlaying;
             setIsPlaying(next);
             setScenario({ ...scenario, simulationStarted: next });
             if (next) {
-              const walls: StartSimPayload['walls'] = [];
-              const sources: StartSimPayload['sources'] = [];
+              const walls: Array<{ x: number; y: number; hp: number }> = [];
+              const sources: Array<{ x: number; y: number; intensity: number }> = [];
               for (let y = 0; y < grid.length; y++) {
                 for (let x = 0; x < (grid[y]?.length ?? 0); x++) {
                   if (grid[y][x] === 'wall') walls.push({ x, y, hp: 100 });
-                  else if (grid[y][x] === 'fire') sources.push({ x, y, intensity: 100 });
+                  else if (grid[y][x] === 'fire') sources.push({ x, y, intensity: 1000 });
                 }
               }
-              try {
-                await fireSim.startSim({
-                  map_id: 'default',
-                  width: resolution,
-                  height: gridRows,
-                  walls,
-                  sources,
-                  trucks: [],
-                });
-              } catch (err) {
-                console.error('[InstructorView] failed to start sim:', err);
-              }
+              localSim.start({ width: resolution, height: gridRows, walls, sources });
             } else {
-              try {
-                await fireSim.resetSim({ map_id: 'default' });
-              } catch (err) {
-                console.error('[InstructorView] failed to reset sim:', err);
-              }
+              localSim.stop();
             }
           }} className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-xs transition-all shadow-md border ${isPlaying ? 'bg-red-50 text-red-500 border-red-200 animate-pulse' : 'bg-green-600 text-white border-green-600 hover:bg-green-500'}`}>
             {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />} {isPlaying ? 'АКТИВНО' : 'ЗАПУСК'}
@@ -513,7 +497,7 @@ export default function InstructorView({
         </div>
 
         <div className="flex-1 overflow-auto bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] bg-slate-50 p-10 flex items-start justify-center">
-            <div className="relative shadow-xl bg-white border border-slate-300 select-none transition-all duration-100 ease-out origin-top" style={{ width: `${zoomLevel}%`, aspectRatio: `${aspectRatio}`, minHeight: mapImage ? 'auto' : '500px' }} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onClick={handleMapClick}>
+            <div className="relative shadow-xl bg-white border border-slate-300 select-none" style={{ width: '80%', aspectRatio: `${aspectRatio}`, minHeight: mapImage ? 'auto' : '500px', transform: `scale(${zoomLevel / 100})`, transformOrigin: 'top center' }} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onClick={handleMapClick}>
               {mapImage && showMapImage && <img src={mapImage} alt="Plan" className="absolute inset-0 w-full h-full object-contain pointer-events-none opacity-60 mix-blend-multiply" />}
               {!mapImage && showMapImage && <div className="absolute inset-0 flex items-center justify-center text-slate-300 pointer-events-none border-2 border-dashed border-slate-300"><span className="text-2xl font-black opacity-20 rotate-[-12deg] tracking-widest">НЕТ СХЕМЫ</span></div>}
 
@@ -522,6 +506,21 @@ export default function InstructorView({
                     <Cell key={`${y}-${x}`} type={cell} x={x} y={y} onMouseDown={handleMouseDown} onMouseEnter={handleMouseEnter} showStructures={showStructures} showGridLines={showGridLines} />
                 )))}
               </div>
+
+              {isPlaying && localSim.snapshot?.grid && (
+                <div className="absolute inset-0 z-[15] pointer-events-none" style={{ display: 'grid', gridTemplateColumns: `repeat(${resolution}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)` }}>
+                  {localSim.snapshot.grid.map((row, y) =>
+                    row.map((temp, x) => {
+                      if (temp <= 0) return <div key={`t-${y}-${x}`} />;
+                      if (temp < 0) return <div key={`t-${y}-${x}`} style={{ backgroundColor: 'rgba(100,100,100,0.7)' }} />;
+                      const t = Math.min(temp / 800, 1);
+                      const g = Math.round(255 * (1 - t * 0.8));
+                      const a = 0.2 + t * 0.6;
+                      return <div key={`t-${y}-${x}`} style={{ backgroundColor: `rgba(255,${g},0,${a})` }} />;
+                    })
+                  )}
+                </div>
+              )}
 
               <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none z-20">
                   {zones.map(zone => <ZoneRenderer key={zone.id} zone={zone} />)}
@@ -577,6 +576,32 @@ export default function InstructorView({
                 <EventButton label="⚠️ Обрушение кровли" active={isPlaying} />
                 <EventButton label="💨 Резкая смена ветра" active={isPlaying} />
            </div>
+           {!isPlaying && (
+             <button onClick={() => {
+               const newGrid: CellType[][] = Array.from({ length: gridRows }, () => new Array(resolution).fill('empty'));
+               const wallMinX = Math.floor(resolution * 0.15);
+               const wallMaxX = Math.floor(resolution * 0.85);
+               const wallMinY = Math.floor(gridRows * 0.15);
+               const wallMaxY = Math.floor(gridRows * 0.7);
+               for (let x = wallMinX; x <= wallMaxX; x++) { newGrid[wallMinY][x] = 'wall'; newGrid[wallMaxY][x] = 'wall'; }
+               for (let y = wallMinY; y <= wallMaxY; y++) { newGrid[y][wallMinX] = 'wall'; newGrid[y][wallMaxX] = 'wall'; }
+               const doorX = Math.floor((wallMinX + wallMaxX) / 2);
+               newGrid[wallMaxY][doorX] = 'door'; newGrid[wallMaxY][doorX + 1] = 'door';
+               const fireX = Math.floor(resolution * 0.35);
+               const fireY = Math.floor(gridRows * 0.4);
+               newGrid[fireY][fireX] = 'fire';
+               setGrid(newGrid);
+             }} className="mt-3 w-full px-3 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-bold hover:bg-amber-100 transition-colors">
+               Демо-сценарий
+             </button>
+           )}
+           {isPlaying && localSim.snapshot && (
+             <div className="mt-3 bg-slate-50 p-3 rounded border border-slate-200 space-y-1">
+               <div className="text-[10px] text-slate-500">Тик: <span className="font-bold text-slate-800">{localSim.snapshot.ticks}</span></div>
+               <div className="text-[10px] text-slate-500">Источников: <span className="font-bold text-red-600">{localSim.snapshot.sources.length}</span></div>
+               <div className="text-[10px] text-slate-500">Макс. t°: <span className="font-bold text-orange-600">{Math.round(Math.max(...localSim.snapshot.grid.flat()))}°</span></div>
+             </div>
+           )}
         </div>
       </div>
     </div>

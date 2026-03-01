@@ -8,6 +8,7 @@ import CommunicationPanel from './components/CommunicationPanel';
 import { useSocket } from './hooks/useSocket';
 import { useFireSim } from './hooks/useFireSim';
 import { Role, ScenarioState, Zone } from './types';
+import type { MapLayout } from './types/firemap';
 
 export default function App() {
   const { socketRef, connected } = useSocket();
@@ -43,6 +44,9 @@ export default function App() {
   // Симуляция огня — подключаемся только когда симуляция запущена
   const fireSim = useFireSim(scenario.simulationStarted ? 'default' : null);
 
+  // Карта, отправленная начальником штаба → РТП
+  const [sharedMapLayout, setSharedMapLayout] = useState<MapLayout | null>(null);
+
   return (
     <div className="flex flex-col h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       {/* Шапка */}
@@ -70,7 +74,6 @@ export default function App() {
             setStationResources={setStationResources}
             targetAddress={targetAddress}
             setTargetAddress={setTargetAddress}
-            fireSim={fireSim}
           />
         )}
         {activeRole === 'dispatcher' && (
@@ -80,9 +83,9 @@ export default function App() {
             correctAddress={targetAddress}
           />
         )}
-        {activeRole === 'rtp' && <RTPView />}
+        {activeRole === 'rtp' && <RTPView sharedLayout={sharedMapLayout} />}
         {activeRole === 'squad' && <SquadView />}
-        {activeRole === 'chief' && <ChiefView simState={fireSim.simState} />}
+        {activeRole === 'chief' && <ChiefView simState={fireSim.simState} onShareLayout={setSharedMapLayout} />}
       </main>
 
       {/* Панель связи */}

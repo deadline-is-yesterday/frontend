@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MousePointer2, Trash2, Save, ZoomIn, ZoomOut } from 'lucide-react';
+import { MousePointer2, Trash2, Save, ZoomIn, ZoomOut, Send } from 'lucide-react';
 import { useFireMapData } from './firemap/useFireMapData';
 import { useFireMapState } from './firemap/useFireMapState';
 import EquipmentPanel from './firemap/EquipmentPanel';
@@ -7,7 +7,7 @@ import EquipmentLayer from './firemap/EquipmentLayer';
 import HydrantLayer from './firemap/HydrantLayer';
 import HoseLayer from './firemap/HoseLayer';
 import BranchingLayer, { getBranchingConnectors } from './firemap/BranchingLayer';
-import type { EditorMode, EquipmentSpec, FireMap, HoseSpec } from '../types/firemap';
+import type { EditorMode, EquipmentSpec, FireMap, HoseSpec, MapLayout } from '../types/firemap';
 import type { FireSimState } from '../types/firesim';
 import { iconUrl } from './firemap/iconUrl';
 import FireGridLayer from './firemap/FireGridLayer';
@@ -20,6 +20,12 @@ interface FireMapViewProps {
   /** Эндпоинт синхронизации рукавов (POST/PUT/DELETE), напр. '/game_logic/hose' */
   hoseEndpoint?: string;
   simState?: FireSimState | null;
+  /** Режим только для чтения — скрывает тулбар и панель техники */
+  readOnly?: boolean;
+  /** Callback для отправки текущей карты РТП */
+  onShareLayout?: (layout: MapLayout) => void;
+  /** Внешний layout для отображения (read-only режим) */
+  initialLayout?: MapLayout | null;
 }
 
 const ZOOM_MIN = 0.3;
@@ -30,7 +36,7 @@ function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
 
-export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoint, simState }: FireMapViewProps) {
+export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoint, simState, readOnly, onShareLayout, initialLayout }: FireMapViewProps) {
   const { map, equipment, savedLayout, loading } = useFireMapData(dataPrefix);
   const {
     layout,
@@ -92,6 +98,11 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
       hoses: savedLayout?.hoses ?? [],
     });
   }, [savedLayout, equipment, loadLayout]);
+
+  // Загрузка внешнего layout (от начальника штаба → РТП)
+  useEffect(() => {
+    if (initialLayout) loadLayout(initialLayout);
+  }, [initialLayout, loadLayout]);
 
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const isSpaceRef = useRef(false);
@@ -392,26 +403,31 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
   return (
     <div className="flex flex-col h-full">
       {/* Тулбар */}
-      <Toolbar
-        mode={mode}
-        zoom={zoom}
-        isSaving={isSaving}
-        hasSelection={!!selectedId}
-        onMode={handleToolbarMode}
-        onDelete={handleDeleteSelected}
-        onSave={handleSave}
-        onZoomIn={() => setZoom(z => clamp(z * ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))}
-        onZoomOut={() => setZoom(z => clamp(z / ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))}
-      />
+      {!readOnly && (
+        <Toolbar
+          mode={mode}
+          zoom={zoom}
+          isSaving={isSaving}
+          hasSelection={!!selectedId}
+          onMode={handleToolbarMode}
+          onDelete={handleDeleteSelected}
+          onSave={handleSave}
+          onZoomIn={() => setZoom(z => clamp(z * ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))}
+          onZoomOut={() => setZoom(z => clamp(z / ZOOM_STEP, ZOOM_MIN, ZOOM_MAX))}
+          onShareLayout={onShareLayout ? () => onShareLayout(layout) : undefined}
+        />
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         {/* Левая панель — список техники */}
-        <EquipmentPanel
-          equipment={equipment}
-          placedIds={layout.placed_equipment.map(e => e.instance_id)}
-          pendingEquipmentId={pendingEquipmentId}
-          onSelect={handleEquipmentPanelSelect}
-        />
+        {!readOnly && (
+          <EquipmentPanel
+            equipment={equipment}
+            placedIds={layout.placed_equipment.map(e => e.instance_id)}
+            pendingEquipmentId={pendingEquipmentId}
+            onSelect={handleEquipmentPanelSelect}
+          />
+        )}
 
         {/* SVG-канвас */}
         <div
@@ -548,6 +564,7 @@ function Toolbar({
   onSave,
   onZoomIn,
   onZoomOut,
+  onShareLayout,
 }: {
   mode: EditorMode;
   zoom: number;
@@ -558,6 +575,7 @@ function Toolbar({
   onSave: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
+  onShareLayout?: () => void;
 }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 border-b border-slate-700 text-white flex-shrink-0">
@@ -603,6 +621,16 @@ function Toolbar({
           <ZoomIn className="w-4 h-4" />
         </button>
       </div>
+
+      {onShareLayout && (
+        <button
+          onClick={onShareLayout}
+          className="flex items-center gap-1 px-3 py-1 rounded text-xs bg-emerald-600 hover:bg-emerald-500 transition-colors"
+        >
+          <Send className="w-3 h-3" />
+          Отправить карту РТП
+        </button>
+      )}
 
       <button
         onClick={onSave}
