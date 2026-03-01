@@ -8,7 +8,9 @@ import HydrantLayer from './firemap/HydrantLayer';
 import HoseLayer from './firemap/HoseLayer';
 import BranchingLayer, { getBranchingConnectors } from './firemap/BranchingLayer';
 import type { EditorMode, EquipmentSpec, FireMap, HoseSpec } from '../types/firemap';
+import type { FireSimState } from '../types/firesim';
 import { iconUrl } from './firemap/iconUrl';
+import FireGridLayer from './firemap/FireGridLayer';
 
 interface FireMapViewProps {
   /** Префикс для загрузки данных (maps/equipment/layout), по умолчанию '/firemap' */
@@ -17,6 +19,7 @@ interface FireMapViewProps {
   equipmentEndpoint?: string;
   /** Эндпоинт синхронизации рукавов (POST/PUT/DELETE), напр. '/game_logic/hose' */
   hoseEndpoint?: string;
+  simState?: FireSimState | null;
 }
 
 const ZOOM_MIN = 0.3;
@@ -27,7 +30,7 @@ function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
 
-export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoint }: FireMapViewProps) {
+export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoint, simState }: FireMapViewProps) {
   const { map, equipment, savedLayout, loading } = useFireMapData(dataPrefix);
   const {
     layout,
@@ -430,6 +433,15 @@ export default function FireMapView({ dataPrefix, equipmentEndpoint, hoseEndpoin
             <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
               {/* Фон плана */}
               <MapBackground map={map} />
+
+              {/* Наложение симуляции огня */}
+              {simState?.grid && (
+                <FireGridLayer
+                  grid={simState.grid}
+                  planWidth={800}
+                  planHeight={600}
+                />
+              )}
 
               {/* Слои */}
               <HoseLayer
